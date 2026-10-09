@@ -10,6 +10,12 @@ from typing import Any, List, Optional, Tuple, Union
 from rich.console import Console
 from rich.table import Table
 
+try:
+    import questionary
+    HAS_QUESTIONARY = True
+except ImportError:
+    HAS_QUESTIONARY = False
+
 # Environment & helper stubs
 import config
 from job import Job
@@ -90,11 +96,33 @@ def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
         return False
 
     if not arg:
-        cmd_list()
-        selected = Util.ask_from_array(machs, "Machine: ")
-        if not selected:
+        if not machs:
+            error("No machines configured")
             return False
-        m_found = selected
+
+        if HAS_QUESTIONARY:
+            try:
+                choices = [
+                    f"{m.name} ({m.mac}) - status: {m.get_status()}, ip: {m.get_ip() or 'N/A'}"
+                    for m in machs
+                ]
+                ans = questionary.select("Select target machine:", choices=choices).ask()
+                if not ans:
+                    return False
+                target_name = ans.split(" ")[0]
+                m_found = Machine.get_by_name(target_name)
+            except Exception:
+                cmd_list()
+                selected = Util.ask_from_array(machs, "Machine: ")
+                if not selected:
+                    return False
+                m_found = selected
+        else:
+            cmd_list()
+            selected = Util.ask_from_array(machs, "Machine: ")
+            if not selected:
+                return False
+            m_found = selected
 
     mach = Machine()
     if m_found:
@@ -107,7 +135,28 @@ def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
 def select_os(mach: Machine) -> Os:
     path = os.path.join(config.MAMA_PATH, "machines", mach.name, "")
     oses = Util.get_directory_contents(path, 2)
+    if "NONE/NONE" not in oses:
+        oses.insert(0, "NONE/NONE")
 
+    if HAS_QUESTIONARY:
+        try:
+            choices = [
+                f"{os_item} (Skip PXE boot)" if os_item == "NONE/NONE" else os_item
+                for os_item in oses
+            ]
+            ans = questionary.select(f"Select OS for {mach.name}:", choices=choices).ask()
+            if ans:
+                clean_os = ans.split(" ")[0]
+                parts = clean_os.split("/", 1)
+                os_obj = Os()
+                os_obj.arch = parts[0]
+                os_obj.os = parts[1] if len(parts) > 1 else ""
+                return os_obj
+            return Os()
+        except Exception:
+            pass
+
+    # Fallback to Rich Table + numeric selection
     console = Console()
     table = Table(
         title=f"Select OS for Machine: {mach.name}",
@@ -118,8 +167,6 @@ def select_os(mach: Machine) -> Os:
     table.add_column("No.", justify="right", style="dim")
     table.add_column("Arch", style="bold yellow")
     table.add_column("OS Name", style="bold white")
-
-    oses.insert(0, "NONE/NONE")
 
     for i, os_item in enumerate(oses, start=1):
         parts = os_item.split("/", 1)
@@ -162,10 +209,7 @@ def list_kernels(mach: Machine) -> None:
 
 
 def select_kernel(mach: Machine) -> str:
-    list_kernels(mach)
-
     kernels = mach.get_kernels()
-    names: List[str] = []
 
     latest = ""
     latest_date = ""
@@ -174,9 +218,28 @@ def select_kernel(mach: Machine) -> str:
         if date_str >= latest_date:
             latest_date = date_str
             latest = name
-        names.append(name)
 
-    names.append("Latest")
+    if HAS_QUESTIONARY:
+        try:
+            choices = [
+                f"{name} (Modified: {date_str})"
+                for name, date_str in kernels.items()
+            ]
+            choices.append("Latest (Auto-detect newest)")
+
+            ans = questionary.select(f"Select Kernel for {mach.name}:", choices=choices).ask()
+            if not ans:
+                return ""
+
+            selected_kernel = ans.split(" ")[0]
+            if selected_kernel.lower() == "latest":
+                return latest
+            return selected_kernel
+        except Exception:
+            pass
+
+    list_kernels(mach)
+    names: List[str] = list(kernels.keys()) + ["Latest"]
 
     kernel = Util.ask_from_array(names, "Kernel:")
     if not kernel:
@@ -248,7 +311,17 @@ def cmd_list() -> None:
 def cmd_new() -> None:
     name = ""
     while not name:
-        name = Util.get_line("Name: ").strip()
+        if HAS_QUESTIONARY:
+            try:
+                name = questionary.text("Name:").ask()
+            except Exception:
+                name = Util.get_line("Name: ").strip()
+        else:
+            name = Util.get_line("Name: ").strip()
+
+        if not name:
+            return
+
         machs = Machine.get_all()
         for m in machs:
             if m.name == name:
@@ -260,28 +333,52 @@ def cmd_new() -> None:
 
     mac = ""
     while not Util.is_valid_mac(mac):
-        mac = Util.get_line("MAC: ").strip()
+        if HAS_QUESTIONARY:
+            try:
+                mac = questionary.text("MAC:").ask()
+            except Exception:
+                mac = Util.get_line("MAC: ").strip()
+        else:
+            mac = Util.get_line("MAC: ").strip()
+
+        if not mac:
+            return
 
     archs = Arch.get_buildable()
-    console = Console()
-    table = Table(
-        title="Select Architecture",
-        header_style="bold cyan",
-        border_style="bright_blue",
-    )
-    table.add_column("No.", justify="right", style="dim")
-    table.add_column("Architecture", style="bold white")
 
-    for idx, a in enumerate(archs, start=1):
-        table.add_row(str(idx), a)
+    if HAS_QUESTIONARY:
+        try:
+            arch = questionary.select("Select Architecture:", choices=archs).ask()
+        except Exception:
+            arch = Util.ask_from_array(archs, "Arch")
+    else:
+        console = Console()
+        table = Table(
+            title="Select Architecture",
+            header_style="bold cyan",
+            border_style="bright_blue",
+        )
+        table.add_column("No.", justify="right", style="dim")
+        table.add_column("Architecture", style="bold white")
 
-    console.print(table)
+        for idx, a in enumerate(archs, start=1):
+            table.add_row(str(idx), a)
 
-    arch = Util.ask_from_array(archs, "Arch")
+        console.print(table)
+        arch = Util.ask_from_array(archs, "Arch")
+
     out(f"Arch selected: {arch}\n")
 
-    only_vm_ans = Util.ask_yesno("Is this only a virtual machine?")
-    only_vm = 1 if only_vm_ans == "y" else 0
+    if HAS_QUESTIONARY:
+        try:
+            only_vm_bool = questionary.confirm("Is this only a virtual machine?").ask()
+            only_vm = 1 if only_vm_bool else 0
+        except Exception:
+            only_vm_ans = Util.ask_yesno("Is this only a virtual machine?")
+            only_vm = 1 if only_vm_ans == "y" else 0
+    else:
+        only_vm_ans = Util.ask_yesno("Is this only a virtual machine?")
+        only_vm = 1 if only_vm_ans == "y" else 0
 
     m.name = name
     m.mac = mac
@@ -827,9 +924,21 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
         return
 
     if not attr:
-        attr = Util.get_line(
-            "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
-        ).strip()
+        attrs = [
+            "os", "kernel", "resources", "params",
+            "vmparams", "startcmd", "stopcmd", "powercmd", "start-timeout"
+        ]
+        if HAS_QUESTIONARY:
+            try:
+                attr = questionary.select("Select attribute to set:", choices=attrs).ask()
+            except Exception:
+                attr = Util.get_line(
+                    "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
+                ).strip()
+        else:
+            attr = Util.get_line(
+                "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
+            ).strip()
 
     val: Any = " ".join(val_list) if val_list else False
 
@@ -853,9 +962,21 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
         return
 
     if not attr:
-        attr = Util.get_line(
-            "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
-        ).strip()
+        attrs = [
+            "os", "params", "resources", "kernel", "reservation",
+            "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power"
+        ]
+        if HAS_QUESTIONARY:
+            try:
+                attr = questionary.select("Select attribute to get:", choices=attrs).ask()
+            except Exception:
+                attr = Util.get_line(
+                    "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
+                ).strip()
+        else:
+            attr = Util.get_line(
+                "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
+            ).strip()
 
     out(str(mach.get(attr)))
 

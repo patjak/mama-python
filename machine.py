@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Union
 from rich.console import Console
 from rich.table import Table
 
+try:
+    import questionary
+    HAS_QUESTIONARY = True
+except ImportError:
+    HAS_QUESTIONARY = False
+
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
@@ -448,6 +454,15 @@ class Machine:
         Log.resume()
 
     def set(self, attr: str, val: Any = "") -> None:
+        def prompt_text(prompt_msg: str) -> str:
+            if HAS_QUESTIONARY:
+                try:
+                    res = questionary.text(prompt_msg).ask()
+                    return res if res is not None else ""
+                except Exception:
+                    return Util.get_line(f"{prompt_msg} ")
+            return Util.get_line(f"{prompt_msg} ")
+
         if attr == "os":
             arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
             os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
@@ -501,7 +516,7 @@ class Machine:
         elif attr == "resources":
             out(f"Current resources: {self.resources}")
             if not val:
-                val = Util.get_line("Enter new resources (space separated): ")
+                val = prompt_text("Enter new resources (space separated):")
             LOCK()
             self.load()
             self.resources = str(val)
@@ -510,7 +525,7 @@ class Machine:
         elif attr == "params":
             out(f"Current boot parameters: {self.boot_params}")
             if not val:
-                val = Util.get_line("Enter new boot parameters: ")
+                val = prompt_text("Enter new boot parameters:")
             LOCK()
             self.load()
             self.boot_params = str(val)
@@ -519,7 +534,7 @@ class Machine:
         elif attr == "vmparams":
             out(f"Current VM parameters: {self.vm_params}")
             if not val:
-                val = Util.get_line("Enter new VM parameters: ")
+                val = prompt_text("Enter new VM parameters:")
             LOCK()
             self.load()
             self.vm_params = str(val)
@@ -528,7 +543,7 @@ class Machine:
         elif attr == "startcmd":
             out(f"Current start command: {self.startcmd}")
             if not val:
-                val = Util.get_line("Enter new start command: ")
+                val = prompt_text("Enter new start command:")
             LOCK()
             self.load()
             self.startcmd = str(val)
@@ -537,7 +552,7 @@ class Machine:
         elif attr == "stopcmd":
             out(f"Current stop command: {self.stopcmd}")
             if not val:
-                val = Util.get_line("Enter new stop command: ")
+                val = prompt_text("Enter new stop command:")
             LOCK()
             self.load()
             self.stopcmd = str(val)
@@ -546,7 +561,7 @@ class Machine:
         elif attr == "powercmd":
             out(f"Current power command: {self.powercmd}")
             if not val:
-                val = Util.get_line("Enter new power command: ")
+                val = prompt_text("Enter new power command:")
             LOCK()
             self.load()
             self.powercmd = str(val)
@@ -555,7 +570,7 @@ class Machine:
         elif attr == "start-timeout":
             out(f"Current start-timeout: {self.start_timeout}")
             if not val:
-                val = Util.get_line("Enter new start-timeout (leave empty for default): ")
+                val = prompt_text("Enter new start-timeout (leave empty for default):")
             LOCK()
             self.load()
             self.start_timeout = int(val) if val else self.start_timeout_default
