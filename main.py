@@ -7,6 +7,9 @@ import subprocess
 import sys
 from typing import Any, List, Optional, Tuple, Union
 
+from rich.console import Console
+from rich.table import Table
+
 # Environment & helper stubs
 import config
 from job import Job
@@ -55,7 +58,7 @@ set <machine>   os <os>                         - set os for machine
                 params <boot parameters>        - Set additional kernel command line parameters
                 vmparams <VM parameters>        - Add additional QEMU command line parameters
                 startcmd <command>              - Run a command instead of the normal start routine
-                stopcmd <command>               - Run a command after normal halt/poweroff of machine
+                stopcmd <command>              - Run a command after normal halt/poweroff of machine
                 powercmd <command>              - Run a command to fetch current power usage in Watts
 get <machine> [os | params | resources | kernel - Get machine attribute
                reservation | ip | mac | vmparams |
@@ -105,8 +108,16 @@ def select_os(mach: Machine) -> Os:
     path = os.path.join(config.MAMA_PATH, "machines", mach.name, "")
     oses = Util.get_directory_contents(path, 2)
 
-    out("No\tArch\t\tOS")
-    out("-" * 80)
+    console = Console()
+    table = Table(
+        title=f"Select OS for Machine: {mach.name}",
+        header_style="bold cyan",
+        border_style="bright_blue",
+        caption='[dim]* "NONE" will let the machine use next boot option after PXE[/dim]',
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Arch", style="bold yellow")
+    table.add_column("OS Name", style="bold white")
 
     oses.insert(0, "NONE/NONE")
 
@@ -114,11 +125,9 @@ def select_os(mach: Machine) -> Os:
         parts = os_item.split("/", 1)
         arch = parts[0]
         os_name = parts[1] if len(parts) > 1 else ""
-        out(Util.pad_str(f"{i} ", 8), no_eol=True)
-        out(Util.pad_str(arch, 16), no_eol=True)
-        out(Util.pad_str(os_name, 32))
+        table.add_row(str(i), arch, os_name)
 
-    out('\n* "NONE" will let the machine use next boot option after PXE')
+    console.print(table)
 
     ask = Util.ask_from_array(oses, "OS:")
     os_obj = Os()
@@ -133,18 +142,23 @@ def select_os(mach: Machine) -> Os:
 def list_kernels(mach: Machine) -> None:
     kernels = mach.get_kernels()
 
-    out("No\tKernel\t\t\t\t\t\tLast modified")
-    out("-" * 80)
+    console = Console()
+    table = Table(
+        title=f"Available Kernels: {mach.name}",
+        header_style="bold cyan",
+        border_style="bright_blue",
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Kernel", style="bold white")
+    table.add_column("Last Modified", style="green")
 
     i = 1
     for kernel, date_str in kernels.items():
-        out(Util.pad_str(f"{i} ", 8), no_eol=True)
-        out(Util.pad_str(kernel, 48), no_eol=True)
-        out(Util.pad_str(date_str, 20))
+        table.add_row(str(i), kernel, date_str)
         i += 1
 
-    out(Util.pad_str(f"{i} ", 8), no_eol=True)
-    out(Util.pad_str("Latest", 48))
+    table.add_row(str(i), "[bold yellow]Latest[/bold yellow]", "[dim]Auto-detect newest[/dim]")
+    console.print(table)
 
 
 def select_kernel(mach: Machine) -> str:
@@ -179,41 +193,56 @@ def select_kernel(mach: Machine) -> str:
 
 
 def cmd_list() -> None:
-    i = 1
-    out(Util.pad_str("No", 4), no_eol=True)
-    out(Util.pad_str("Name", 18), no_eol=True)
-    out(Util.pad_str("IP", 16), no_eol=True)
-    out(Util.pad_str("MAC", 18), no_eol=True)
-    out(Util.pad_str("State", 8), no_eol=True)
-    out(Util.pad_str("On", 5), no_eol=True)
-    out(Util.pad_str("Pwr", 6), no_eol=True)
-    out(Util.pad_str("VM", 4), no_eol=True)
-    out(Util.pad_str("Job", 32))
-
-    out("-" * 111)
+    console = Console()
+    table = Table(
+        title="Configured Machines",
+        header_style="bold cyan",
+        border_style="bright_blue",
+        title_style="bold white",
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Name", style="bold white")
+    table.add_column("IP", style="green")
+    table.add_column("MAC", style="magenta")
+    table.add_column("State")
+    table.add_column("On", justify="center")
+    table.add_column("Pwr", justify="right", style="yellow")
+    table.add_column("VM", justify="center")
+    table.add_column("Job", style="italic")
 
     machs = Machine.get_all()
 
-    for mach in machs:
-        ip = mach.get_ip() or ""
+    for i, mach in enumerate(machs, start=1):
+        ip = mach.get_ip() or "-"
+        status = mach.get_status()
 
-        out(Util.pad_str(i, 4), no_eol=True)
-        out(Util.pad_str(mach.name, 18), no_eol=True)
-        out(Util.pad_str(ip, 16), no_eol=True)
-        out(Util.pad_str(mach.mac, 18), no_eol=True)
-        out(Util.pad_str(mach.get_status(), 8), no_eol=True)
+        if status == "online":
+            status_str = "[bold green]online[/bold green]"
+        elif status == "unreachable":
+            status_str = "[bold yellow]unreachable[/bold yellow]"
+        else:
+            status_str = "[dim red]offline[/dim red]"
 
-        started = "Yes" if mach.is_started() else ""
-        out(Util.pad_str(started, 5), no_eol=True)
-        out(Util.pad_str(mach.get_power(), 6), no_eol=True)
-        out(Util.pad_str("Yes" if mach.is_vm() else "", 4), no_eol=True)
+        started_str = "[green]Yes[/green]" if mach.is_started() else "[dim]-[/dim]"
+        vm_str = "[cyan]Yes[/cyan]" if mach.is_vm() else "[dim]-[/dim]"
 
-        job_str = mach.job
-        if job_str and mach.is_job_stale():
-            job_str += " [STALE]"
-        out(job_str)
+        job_str = mach.job or "-"
+        if mach.job and mach.is_job_stale():
+            job_str = f"{mach.job} [bold red][STALE][/bold red]"
 
-        i += 1
+        table.add_row(
+            str(i),
+            mach.name,
+            ip,
+            mach.mac,
+            status_str,
+            started_str,
+            mach.get_power(),
+            vm_str,
+            job_str,
+        )
+
+    console.print(table)
 
 
 def cmd_new() -> None:
@@ -234,12 +263,19 @@ def cmd_new() -> None:
         mac = Util.get_line("MAC: ").strip()
 
     archs = Arch.get_buildable()
-    out("\nNo\tArch")
-    out("-" * 32)
+    console = Console()
+    table = Table(
+        title="Select Architecture",
+        header_style="bold cyan",
+        border_style="bright_blue",
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Architecture", style="bold white")
 
     for idx, a in enumerate(archs, start=1):
-        out(Util.pad_str(idx, 8), no_eol=True)
-        out(a)
+        table.add_row(str(idx), a)
+
+    console.print(table)
 
     arch = Util.ask_from_array(archs, "Arch")
     out(f"Arch selected: {arch}\n")
@@ -267,22 +303,34 @@ def cmd_new() -> None:
 
 
 def cmd_list_os(m: Union[str, bool] = False) -> None:
+    console = Console()
     if m:
         mach = select_machine(m)
         if not isinstance(mach, Machine):
             return
-        out(f"Listing installed OSes for machine: {mach.name}")
+        title = f"Installed OSes for Machine: {mach.name}"
         path = os.path.join(config.MAMA_PATH, "machines", mach.name, "")
     else:
+        title = "Available OS Templates"
         path = os.path.join(config.MAMA_PATH, "os", "")
 
-    out("No\tOS")
-    out("-" * 80)
+    table = Table(
+        title=title,
+        header_style="bold cyan",
+        border_style="bright_blue",
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Architecture", style="bold yellow")
+    table.add_column("OS Name", style="bold white")
 
     oses = Util.get_directory_contents(path, 2)
     for idx, os_item in enumerate(oses, start=1):
-        out(Util.pad_str(f"{idx} ", 8), no_eol=True)
-        out(os_item)
+        parts = os_item.split("/", 1)
+        arch = parts[0]
+        os_name = parts[1] if len(parts) > 1 else ""
+        table.add_row(str(idx), arch, os_name)
+
+    console.print(table)
 
 
 def cmd_list_kernel(m: str) -> None:
@@ -308,8 +356,26 @@ def cmd_list_resources() -> None:
                 entry += "*"
             resources[res] = resources.get(res, "") + entry
 
+    console = Console()
+    table = Table(
+        title="Resource Assignments (* = Machine Active)",
+        header_style="bold cyan",
+        border_style="bright_blue",
+    )
+    table.add_column("Resource", style="bold yellow")
+    table.add_column("Assigned Machines", style="bold white")
+
     for res in sorted(resources.keys()):
-        out(f"{res}:\t{resources[res]}")
+        mach_list = resources[res].split()
+        styled_machs = []
+        for m in mach_list:
+            if m.endswith("*"):
+                styled_machs.append(f"[bold green]{m}[/bold green]")
+            else:
+                styled_machs.append(f"[dim]{m}[/dim]")
+        table.add_row(res, ", ".join(styled_machs))
+
+    console.print(table)
 
 
 def cmd_job_prepare(job_name: str, arch: str, os_name: str, worker: str = "jobs") -> None:

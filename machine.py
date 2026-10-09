@@ -9,6 +9,9 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Union
 
+from rich.console import Console
+from rich.table import Table
+
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
@@ -157,7 +160,7 @@ class Machine:
     def get_all(cls) -> List[Machine]:
         machs: List[Machine] = []
         Settings.load()
-        
+
         if Settings.settings is not None:
             if hasattr(Settings.settings, "findall"):
                 machines_xml = Settings.settings.findall("machine")
@@ -385,41 +388,63 @@ class Machine:
     def print_info(self) -> None:
         Log.pause()
 
-        ip = self.get_ip() or ""
-        out(f"Name:\t\t{self.name}")
-        out(f"MAC:\t\t{self.mac}")
-        out(f"IP:\t\t{ip}")
-        out(f"Is started:\t{'yes' if self.is_started() else 'no'}")
-        out(f"Is only VM:\t{'yes' if self.is_only_vm() else 'no'}")
-        out(f"OS:\t\t{self.os}")
-        out(f"Kernel:\t\t{self.kernel}")
-        out(f"Status:\t\t{self.get_status()}")
+        console = Console()
+        table = Table(
+            title=f"Machine Information: {self.name}",
+            header_style="bold cyan",
+            border_style="bright_blue",
+            title_style="bold white",
+            show_header=True,
+        )
+        table.add_column("Property", style="bold yellow", width=20)
+        table.add_column("Value", style="bold white")
+
+        ip = self.get_ip() or "-"
+        status = self.get_status()
+        if status == "online":
+            status_str = "[bold green]online[/bold green]"
+        elif status == "unreachable":
+            status_str = "[bold yellow]unreachable[/bold yellow]"
+        else:
+            status_str = "[dim red]offline[/dim red]"
+
+        table.add_row("Name", self.name)
+        table.add_row("MAC", self.mac)
+        table.add_row("IP", ip)
+        table.add_row("Is started", "[green]yes[/green]" if self.is_started() else "[dim]no[/dim]")
+        table.add_row("Is only VM", "[cyan]yes[/cyan]" if self.is_only_vm() else "[dim]no[/dim]")
+        table.add_row("OS", self.os or "-")
+        table.add_row("Kernel", self.kernel or "-")
+        table.add_row("Status", status_str)
+
         if self.reservation:
-            out(f"Reserved by:\t{self.reservation}")
+            table.add_row("Reserved by", f"[bold magenta]{self.reservation}[/bold magenta]")
 
         nested = Machine.get_nested_resources(self.name)
-        nested_str = f"(nested: {nested})" if nested else ""
+        nested_str = f" [dim](nested: {nested})[/dim]" if nested else ""
 
         if self.resources:
-            out(f"Resources:\t{self.resources} {nested_str}")
+            table.add_row("Resources", f"{self.resources}{nested_str}")
         if self.startcmd:
-            out(f"Start command:\t{self.startcmd}")
+            table.add_row("Start command", self.startcmd)
         if self.stopcmd:
-            out(f"Stop command:\t{self.stopcmd}")
+            table.add_row("Stop command", self.stopcmd)
         if self.powercmd:
-            out(f"Power command:\t{self.powercmd}")
-            out(f"Power usage:\t{self.get_power()}")
-        out(f"Start timeout:\t{self.start_timeout}")
-        out(f"Boot params:\t{self.boot_params}")
+            table.add_row("Power command", self.powercmd)
+            table.add_row("Power usage", self.get_power())
+        table.add_row("Start timeout", f"{self.start_timeout}s")
+        if self.boot_params:
+            table.add_row("Boot params", self.boot_params)
         if self.vm_params:
-            out(f"VM params:\t{self.vm_params}")
+            table.add_row("VM params", self.vm_params)
         if self.job:
-            out(f"Running job:\t{self.job}")
+            table.add_row("Running job", self.job)
             if self.job_pid:
-                out(f"Job PID:\t{self.job_pid}")
+                table.add_row("Job PID", self.job_pid)
             if self.is_job_stale():
-                out("Job status:\tSTALE (process not running)")
+                table.add_row("Job status", "[bold red]STALE (process not running)[/bold red]")
 
+        console.print(table)
         Log.resume()
 
     def set(self, attr: str, val: Any = "") -> None:
