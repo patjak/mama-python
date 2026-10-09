@@ -63,6 +63,7 @@ reserve <machine>                               - Reserve the machine for the cu
 release <machine>                               - Release any reservation you have on the machine
 release-forced <machine>                        - Release the machine even if you didn't reserve it
 wait <machine>                                  - Wait for a machine to become available for use
+serve                                           - start the iPXE boot server
 """
     out(usage, no_eol=True, timestamp=False)
 
@@ -784,7 +785,12 @@ def cmd_wait(arg: Union[str, bool]) -> None:
         mach.wait()
 
 
-def bootinfo(mac: str, server_ip: str) -> Tuple[str, str, str]:
+def cmd_serve() -> None:
+    import boot
+    boot.main()
+
+
+def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tuple[str, str, str]:
     mach = Machine.find_by_mac(mac)
     if not mach:
         new_mach = Machine(name=mac, mac=mac)
@@ -963,6 +969,8 @@ def parse_args(argv: List[str]) -> None:
         cmd_release_forced(arg)
     elif cmd == "wait":
         cmd_wait(arg)
+    elif cmd == "serve":
+        cmd_serve()
     elif cmd == "ipxe":
         cmd_ipxe(argv)
     elif cmd == "bootinfo":
