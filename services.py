@@ -11,7 +11,6 @@ from typing import Any, List, Optional
 
 import config
 from util import Util
-from ctldev import CtlDev
 from os_mgr import Os
 
 
@@ -141,10 +140,6 @@ class Settings:
             ("arch", getattr(mach, "arch", "")),
             ("os", getattr(mach, "os", "")),
             ("kernel", getattr(mach, "kernel", "")),
-            ("pwr_dev", getattr(mach, "pwr_dev", "")),
-            ("pwr_slot", getattr(mach, "pwr_slot", "")),
-            ("rly_dev", getattr(mach, "rly_dev", "")),
-            ("rly_slot", getattr(mach, "rly_slot", "")),
             ("reservation", getattr(mach, "reservation", "")),
             ("resources", getattr(mach, "resources", "")),
             ("boot_params", getattr(mach, "boot_params", "")),
@@ -153,6 +148,7 @@ class Settings:
             ("job_pid", getattr(mach, "job_pid", "")),
             ("startcmd", getattr(mach, "startcmd", "")),
             ("stopcmd", getattr(mach, "stopcmd", "")),
+            ("powercmd", getattr(mach, "powercmd", "")),
             ("start_timeout", str(getattr(mach, "start_timeout", "240"))),
         ]
 
@@ -180,10 +176,6 @@ class Settings:
             ("arch", getattr(mach, "arch", "")),
             ("os", getattr(mach, "os", "")),
             ("kernel", getattr(mach, "kernel", "")),
-            ("pwr_dev", getattr(mach, "pwr_dev", "")),
-            ("pwr_slot", getattr(mach, "pwr_slot", "")),
-            ("rly_dev", getattr(mach, "rly_dev", "")),
-            ("rly_slot", getattr(mach, "rly_slot", "")),
             ("reservation", getattr(mach, "reservation", "")),
             ("resources", getattr(mach, "resources", "")),
             ("boot_params", getattr(mach, "boot_params", "")),
@@ -192,6 +184,7 @@ class Settings:
             ("job_pid", getattr(mach, "job_pid", "")),
             ("startcmd", getattr(mach, "startcmd", "")),
             ("stopcmd", getattr(mach, "stopcmd", "")),
+            ("powercmd", getattr(mach, "powercmd", "")),
             ("start_timeout", str(getattr(mach, "start_timeout", "240"))),
         ]
 

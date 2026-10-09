@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
-from services import CtlDev, Os, Settings, Util
+from services import Os, Settings, Util
 
 
 def LOCK() -> None:
@@ -40,7 +40,6 @@ class Machine:
     start_timeout_default: int = 4 * 60
     stop_timeout: int = 30
     ssh_cmd_timeout: int = 1 * 60
-    rly_force_off_delay: int = 8
     power_cycle_delay: int = 30
     resource_wait_timeout: int = 20 * 60 * 60
 
@@ -64,10 +63,6 @@ class Machine:
         self.arch: str = ""
         self.os: str = ""
         self.kernel: str = ""
-        self.pwr_dev: str = ""
-        self.pwr_slot: str = ""
-        self.rly_dev: str = ""
-        self.rly_slot: str = ""
         self.reservation: str = ""
         self.resources: str = ""
         self.boot_params: str = ""
@@ -77,6 +72,7 @@ class Machine:
         self.job_pid: str = ""
         self.startcmd: str = ""
         self.stopcmd: str = ""
+        self.powercmd: str = ""
         self.start_timeout: int = self.start_timeout_default
 
         self._lock: int = 0
@@ -226,8 +222,29 @@ class Machine:
             self.save()
             UNLOCK()
 
-    def get_power(self) -> Any:
-        return self.get_power_attribute("output (bool)")
+    def get_power(self) -> str:
+        """Execute powercmd to query current power usage in Watts."""
+        if not self.powercmd or not self.powercmd.strip():
+            return "-"
+
+        cmd = self.powercmd
+        cmd = cmd.replace("$OS_ARCH", self.get_os_arch())
+        cmd = cmd.replace("$MAC", self.mac)
+        cmd = cmd.replace("$PID", str(os.getpid()))
+
+        try:
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip():
+                val_str = res.stdout.strip().splitlines()[-1].strip()
+                try:
+                    val_float = float(val_str)
+                    p_val = round(val_float)
+                    return f"{p_val}W" if p_val > 0 else "0W"
+                except ValueError:
+                    return val_str
+        except Exception:
+            pass
+        return "-"
 
     def get_ssh_status(self) -> str:
         ip = self.get_ip()
@@ -292,10 +309,6 @@ class Machine:
         self.arch = get_val("arch")
         self.os = get_val("os")
         self.kernel = get_val("kernel")
-        self.pwr_dev = get_val("pwr_dev")
-        self.pwr_slot = get_val("pwr_slot")
-        self.rly_dev = get_val("rly_dev")
-        self.rly_slot = get_val("rly_slot")
         self.reservation = get_val("reservation")
         self.resources = get_val("resources")
         self.boot_params = get_val("boot_params")
@@ -305,6 +318,7 @@ class Machine:
         self.job_pid = get_val("job_pid")
         self.startcmd = get_val("startcmd")
         self.stopcmd = get_val("stopcmd")
+        self.powercmd = get_val("powercmd")
 
         start_tout = get_val("start_timeout")
         try:
@@ -374,10 +388,6 @@ class Machine:
         out(f"OS:\t\t{self.os}")
         out(f"Kernel:\t\t{self.kernel}")
         out(f"Status:\t\t{self.get_status()}")
-        if self.pwr_dev:
-            out(f"Power device:\t{self.pwr_dev},{self.pwr_slot}")
-        if self.rly_dev:
-            out(f"Relay device:\t{self.rly_dev},{self.rly_slot}")
         if self.reservation:
             out(f"Reserved by:\t{self.reservation}")
 
@@ -390,6 +400,9 @@ class Machine:
             out(f"Start command:\t{self.startcmd}")
         if self.stopcmd:
             out(f"Stop command:\t{self.stopcmd}")
+        if self.powercmd:
+            out(f"Power command:\t{self.powercmd}")
+            out(f"Power usage:\t{self.get_power()}")
         out(f"Start timeout:\t{self.start_timeout}")
         out(f"Boot params:\t{self.boot_params}")
         if self.vm_params:
@@ -401,37 +414,10 @@ class Machine:
             if self.is_job_stale():
                 out("Job status:\tSTALE (process not running)")
 
-        if self.pwr_dev:
-            out("Power sensors:")
-            dev = CtlDev.get_by_name(self.pwr_dev)
-            if not dev:
-                out("Couldn't find power device")
-                Log.resume()
-                return
-
-            data = dev.get_sensors(self.pwr_slot)
-            if data is None:
-                out("No sensors found")
-                Log.resume()
-                return
-
-            for key, val in data.items():
-                out("  ", no_eol=True)
-                out(Util.pad_str(key, 16), no_eol=True)
-                out(f": {val}")
-
         Log.resume()
 
     def set(self, attr: str, val: Any = "") -> None:
-        if attr == "power":
-            dev = CtlDev.get_by_name(self.pwr_dev)
-            if dev:
-                dev.set_power(self.pwr_slot, val)
-        elif attr == "relay":
-            dev = CtlDev.get_by_name(self.rly_dev)
-            if dev:
-                dev.push(self.rly_slot, val)
-        elif attr == "os":
+        if attr == "os":
             arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
             os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
             os_str = f"{arch}/{os_name}"
@@ -526,6 +512,15 @@ class Machine:
             self.stopcmd = str(val)
             self.save()
             UNLOCK()
+        elif attr == "powercmd":
+            out(f"Current power command: {self.powercmd}")
+            if not val:
+                val = Util.get_line("Enter new power command: ")
+            LOCK()
+            self.load()
+            self.powercmd = str(val)
+            self.save()
+            UNLOCK()
         elif attr == "start-timeout":
             out(f"Current start-timeout: {self.start_timeout}")
             if not val:
@@ -542,14 +537,14 @@ class Machine:
             "vmparams": self.vm_params,
             "os": self.os,
             "kernel": self.kernel,
-            "power": self.pwr_dev,
-            "relay": self.rly_dev,
             "resources": self.resources,
             "reservation": self.reservation,
             "ip": self.get_ip(),
             "mac": self.mac,
             "startcmd": self.startcmd,
             "stopcmd": self.stopcmd,
+            "powercmd": self.powercmd,
+            "power": self.get_power(),
         }
         if attr in mapping:
             return mapping[attr]
@@ -560,24 +555,6 @@ class Machine:
         if not self.os:
             return ""
         return self.os.split("/")[0]
-
-    def get_power_attribute(self, attr: str) -> Any:
-        dev = CtlDev.get_by_name(self.pwr_dev)
-        if not dev:
-            self.error("Couldn't find power device")
-            return False
-
-        data = dev.get_sensors(self.pwr_slot)
-        if data is None:
-            self.error("No sensors found")
-            return False
-
-        for key, val in data.items():
-            if key == attr:
-                self.debug(f"Getting: {attr} = {val}")
-                return val
-
-        return False
 
     def wait_for_status(self, status: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
         try:
@@ -704,16 +681,6 @@ class Machine:
         UNLOCK()
 
         if status == "offline":
-            if self.pwr_dev:
-                if self.get_power() != 0:
-                    self.set("power", 0)
-                    self.debug(f"Power was already on. Waiting: {self.power_cycle_delay} seconds")
-                    time.sleep(self.power_cycle_delay)
-                self.set("power", 1)
-
-            if self.rly_dev:
-                self.set("relay", 1)
-
             if self.startcmd:
                 startcmd = self.startcmd
                 startcmd = startcmd.replace("$OS_ARCH", self.get_os_arch())
@@ -851,20 +818,7 @@ class Machine:
         status = self.get_status()
 
         if status == "online":
-            if not self.pwr_dev and not self.stopcmd:
-                self.ssh_cmd("poweroff")
-            else:
-                self.ssh_cmd("halt")
-
-        if status == "unreachable":
-            if self.rly_dev:
-                self.set("relay", 8)
-            elif self.pwr_dev:
-                self.set("power", 0)
-            else:
-                self.debug("No control device available to turn off the machine")
-                self.clear()
-                return False
+            self.ssh_cmd("poweroff")
 
         if self.wait_for_status("offline", self.stop_timeout):
             if self.stopcmd:
@@ -876,16 +830,12 @@ class Machine:
                 self.debug(f"Stop command: {stopcmd}")
                 subprocess.run(stopcmd, shell=True)
 
-            if self.rly_dev:
-                self.set("relay", self.rly_force_off_delay)
             if self.is_vm():
                 self.debug("Killing VM")
                 self.kill_vm()
 
         if self.is_vm():
             self.kill_vm()
-        else:
-            self.set("power", 0)
 
         self.clear()
         return True

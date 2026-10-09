@@ -11,9 +11,10 @@ from typing import Any, List, Optional, Tuple, Union
 import config
 from job import Job
 from logger import Log, debug, error, fatal, out
+from machine import Machine
 from options import Options
 from os_mgr import Arch, Os
-from services import CtlDev, Machine, Settings, Util
+from services import Settings, Util
 
 
 def print_usage(argv: List[str]) -> None:
@@ -48,18 +49,17 @@ start-vm [machine]                              - boot virtual instance of machi
 stop [machine]                                  - triggers power button
 clear [machine | all]                           - stop machine and clear stale data (ip, job, etc)
 connect [machine]                               - connect to machine with ssh
-set <machine>   power <value>                   - control wall power
-                relay <seconds>                 - connect the relay for x seconds
-                os <os>                         - set os for machine
+set <machine>   os <os>                         - set os for machine
                 kernel <kernel>                 - set kernel for machine
                 resources <resources>           - comma separated list of resources to set
                 params <boot parameters>        - Set additional kernel command line parameters
                 vmparams <VM parameters>        - Add additional QEMU command line parameters
                 startcmd <command>              - Run a command instead of the normal start routine
                 stopcmd <command>               - Run a command after normal halt/poweroff of machine
-get <machine> [power | relay | os | params |    - Get machine attribute
-               resources | kernel | reservation
-               ip | mac | vmparams ]
+                powercmd <command>              - Run a command to fetch current power usage in Watts
+get <machine> [os | params | resources | kernel - Get machine attribute
+               reservation | ip | mac | vmparams |
+               startcmd | stopcmd | powercmd | power ]
 reserve <machine>                               - Reserve the machine for the current user
 release <machine>                               - Release any reservation you have on the machine
 release-forced <machine>                        - Release the machine even if you didn't reserve it
@@ -179,8 +179,6 @@ def select_kernel(mach: Machine) -> str:
 
 
 def cmd_list() -> None:
-    pwr_devs: dict = {}
-
     i = 1
     out(Util.pad_str("No", 4), no_eol=True)
     out(Util.pad_str("Name", 18), no_eol=True)
@@ -197,21 +195,6 @@ def cmd_list() -> None:
     machs = Machine.get_all()
 
     for mach in machs:
-        pwr_dev = CtlDev.get_by_name(mach.pwr_dev) if mach.pwr_dev else False
-
-        if pwr_dev and mach.pwr_dev not in pwr_devs:
-            pwr_devs[mach.pwr_dev] = pwr_dev.get_sensors_all_slots()
-
-        if mach.pwr_dev not in pwr_devs or pwr_devs[mach.pwr_dev] is None:
-            power = "-"
-        else:
-            try:
-                slot_idx = int(mach.pwr_slot) - 1
-                sensor = pwr_devs[mach.pwr_dev][slot_idx]
-                power = sensor.get("power", "-")
-            except (ValueError, IndexError, TypeError):
-                power = "-"
-
         ip = mach.get_ip() or ""
 
         out(Util.pad_str(i, 4), no_eol=True)
@@ -222,12 +205,7 @@ def cmd_list() -> None:
 
         started = "Yes" if mach.is_started() else ""
         out(Util.pad_str(started, 5), no_eol=True)
-
-        if isinstance(power, (int, float)) or (isinstance(power, str) and power.replace(".", "", 1).isdigit()):
-            p_val = round(float(power))
-            power = f"{p_val}W" if p_val > 0 else "0"
-
-        out(Util.pad_str(power, 6), no_eol=True)
+        out(Util.pad_str(mach.get_power(), 6), no_eol=True)
         out(Util.pad_str("Yes" if mach.is_vm() else "", 4), no_eol=True)
 
         job_str = mach.job
@@ -268,34 +246,6 @@ def cmd_new() -> None:
 
     only_vm_ans = Util.ask_yesno("Is this only a virtual machine?")
     only_vm = 1 if only_vm_ans == "y" else 0
-
-    if only_vm == 0 and len(CtlDev.devs) > 1:
-        out("No\tPower device\tSlots")
-        out("-" * 32)
-        for idx, dev in enumerate(CtlDev.devs, start=1):
-            out(Util.pad_str(idx, 8), no_eol=True)
-            out(Util.pad_str(dev.name, 16), no_eol=True)
-            out(Util.pad_str(dev.slots, 8))
-
-        pwr_dev = Util.ask_from_array(CtlDev.devs, "Power device: ")
-        out(f"Device selected: {pwr_dev.name}")
-        pwr_slot = Util.ask_number(pwr_dev.slots, "Power device slot: ") if pwr_dev.slots > 0 else 0
-
-        out("No\tRelay device\tSlots")
-        out("-" * 32)
-        for idx, dev in enumerate(CtlDev.devs, start=1):
-            out(Util.pad_str(idx, 8), no_eol=True)
-            out(Util.pad_str(dev.name, 16), no_eol=True)
-            out(Util.pad_str(dev.slots, 8))
-
-        rly_dev = Util.ask_from_array(CtlDev.devs, "Relay device: ")
-        out(f"Device selected: {rly_dev.name}")
-        rly_slot = Util.ask_number(rly_dev.slots, "Relay device slot: ") if rly_dev.slots > 0 else 0
-
-        m.pwr_dev = "" if pwr_dev.name == "- None -" else pwr_dev.name
-        m.pwr_slot = str(pwr_slot)
-        m.rly_dev = "" if rly_dev.name == "- None -" else rly_dev.name
-        m.rly_slot = str(rly_slot)
 
     m.name = name
     m.mac = mac
@@ -812,16 +762,12 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
 
     if not attr:
         attr = Util.get_line(
-            "{power | relay | os | kernel | resources | params | vmparams | start-timeout}: "
+            "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
         ).strip()
 
     val: Any = " ".join(val_list) if val_list else False
 
-    if attr == "power" and val is False:
-        val = Util.get_line("Power (0-1): ").strip()
-    elif attr == "relay" and val is False:
-        val = Util.get_line("Time (secs): ").strip()
-    elif attr == "os":
+    if attr == "os":
         if val is False:
             val = select_os(mach)
         else:
@@ -842,7 +788,7 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
 
     if not attr:
         attr = Util.get_line(
-            "{power | relay | os | params | resources | kernel | reservation | ip | mac}: "
+            "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
         ).strip()
 
     out(str(mach.get(attr)))
