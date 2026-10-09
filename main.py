@@ -16,6 +16,16 @@ try:
 except ImportError:
     HAS_QUESTIONARY = False
 
+try:
+    from rich_argparse import RichHelpFormatter
+    HELP_FORMATTER = RichHelpFormatter
+    RichHelpFormatter.styles["argparse.groups"] = "bold cyan"
+    RichHelpFormatter.styles["argparse.args"] = "yellow"
+    RichHelpFormatter.styles["argparse.metavar"] = "green"
+    RichHelpFormatter.styles["argparse.prog"] = "bold magenta"
+except ImportError:
+    HELP_FORMATTER = argparse.HelpFormatter
+
 # Environment & helper stubs
 import config
 from job import Job
@@ -994,7 +1004,7 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
 
 
 def setup_cli_parser() -> argparse.ArgumentParser:
-    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser = argparse.ArgumentParser(add_help=False, formatter_class=HELP_FORMATTER)
     parent_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parent_parser.add_argument("--debug-lock", dest="debug_lock", action="store_true", help="Enable lock debugging")
     parent_parser.add_argument("--debug-pid", dest="debug_pid", action="store_true", help="Enable PID debugging")
@@ -1004,123 +1014,128 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     parent_parser.add_argument("--no-retry", dest="no_retry", action="store_true", help="Don't retry starting machines multiple times")
     parent_parser.add_argument("--no-overwrite", dest="no_overwrite", action="store_true", help="Skip overwriting existing OS on copy")
 
-    root_parser = argparse.ArgumentParser(prog="mama", description="MAMA Machine and OS Management Framework", parents=[parent_parser])
-    subparsers = root_parser.add_subparsers(dest="command", help="Available commands")
+    root_parser = argparse.ArgumentParser(
+        prog="mama",
+        description="MAMA Machine and OS Management Framework",
+        parents=[parent_parser],
+        formatter_class=HELP_FORMATTER,
+    )
+    subparsers = root_parser.add_subparsers(dest="command", help="Available commands", metavar="<command>")
 
-    subparsers.add_parser("list", parents=[parent_parser], help="List configured machines")
+    subparsers.add_parser("list", parents=[parent_parser], help="List configured machines", formatter_class=HELP_FORMATTER)
 
-    p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes")
+    p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes", formatter_class=HELP_FORMATTER)
     p_list_os.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_list_kernel = subparsers.add_parser("list-kernel", parents=[parent_parser], help="List available kernels")
+    p_list_kernel = subparsers.add_parser("list-kernel", parents=[parent_parser], help="List available kernels", formatter_class=HELP_FORMATTER)
     p_list_kernel.add_argument("machine", help="Target machine")
 
-    subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources")
+    subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources", formatter_class=HELP_FORMATTER)
 
-    p_log = subparsers.add_parser("log", parents=[parent_parser], help="Print log file")
+    p_log = subparsers.add_parser("log", parents=[parent_parser], help="Print log file", formatter_class=HELP_FORMATTER)
     p_log.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_tail = subparsers.add_parser("tail", parents=[parent_parser], help="Tail log file")
+    p_tail = subparsers.add_parser("tail", parents=[parent_parser], help="Tail log file", formatter_class=HELP_FORMATTER)
     p_tail.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_clear_log = subparsers.add_parser("clear-log", parents=[parent_parser], help="Clear log for machine")
+    p_clear_log = subparsers.add_parser("clear-log", parents=[parent_parser], help="Clear log for machine", formatter_class=HELP_FORMATTER)
     p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
 
     # Job subcommands
-    job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows")
+    job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows", formatter_class=HELP_FORMATTER)
     job_p.add_argument("job_name", help="Job name")
-    job_sub = job_p.add_subparsers(dest="job_action", help="Job action")
+    job_sub = job_p.add_subparsers(dest="job_action", help="Job action", metavar="<action>")
 
-    prep_p = job_sub.add_parser("prepare", parents=[parent_parser], help="Execute prepare job")
+    prep_p = job_sub.add_parser("prepare", parents=[parent_parser], help="Execute prepare job", formatter_class=HELP_FORMATTER)
     prep_p.add_argument("arch", help="Target architecture")
     prep_p.add_argument("os", help="Target OS")
     prep_p.add_argument("worker", nargs="?", default="jobs", help="Worker machine name")
 
-    run_p = job_sub.add_parser("run", parents=[parent_parser], help="Execute run job")
+    run_p = job_sub.add_parser("run", parents=[parent_parser], help="Execute run job", formatter_class=HELP_FORMATTER)
     run_p.add_argument("machine", help="Target machine")
     run_p.add_argument("arch", help="Target architecture")
     run_p.add_argument("os", help="Target OS")
 
     # OS Build and Management
-    p_build = subparsers.add_parser("build-os", parents=[parent_parser], help="Build a deployable OS")
+    p_build = subparsers.add_parser("build-os", parents=[parent_parser], help="Build a deployable OS", formatter_class=HELP_FORMATTER)
     p_build.add_argument("arch", help="Architecture")
     p_build.add_argument("os", help="OS name")
     p_build.add_argument("builder", nargs="?", default="os-builder", help="Builder machine name")
 
-    p_run_script = subparsers.add_parser("run-os-build-script", parents=[parent_parser], help="Run local OS build script")
+    p_run_script = subparsers.add_parser("run-os-build-script", parents=[parent_parser], help="Run local OS build script", formatter_class=HELP_FORMATTER)
     p_run_script.add_argument("arch", help="Architecture")
     p_run_script.add_argument("os", help="OS name")
 
-    p_install = subparsers.add_parser("install-os", parents=[parent_parser], help="Install OS to a machine")
+    p_install = subparsers.add_parser("install-os", parents=[parent_parser], help="Install OS to a machine", formatter_class=HELP_FORMATTER)
     p_install.add_argument("machine", help="Target machine")
     p_install.add_argument("arch", help="Architecture")
     p_install.add_argument("os", help="Source OS name")
     p_install.add_argument("name", nargs="?", default=None, help="Destination installation name")
 
-    p_del_os = subparsers.add_parser("delete-os", parents=[parent_parser], help="Delete an OS installed on a machine")
+    p_del_os = subparsers.add_parser("delete-os", parents=[parent_parser], help="Delete an OS installed on a machine", formatter_class=HELP_FORMATTER)
     p_del_os.add_argument("machine", help="Target machine")
     p_del_os.add_argument("arch", help="Architecture")
     p_del_os.add_argument("os", help="OS name")
 
-    p_copy_os = subparsers.add_parser("copy-os", parents=[parent_parser], help="Copy OS from one machine to another")
+    p_copy_os = subparsers.add_parser("copy-os", parents=[parent_parser], help="Copy OS from one machine to another", formatter_class=HELP_FORMATTER)
     p_copy_os.add_argument("src_mach", help="Source machine")
     p_copy_os.add_argument("arch", help="Architecture")
     p_copy_os.add_argument("os", help="OS name")
     p_copy_os.add_argument("dst_mach", help="Destination machine")
 
     # Machine operations
-    subparsers.add_parser("new", parents=[parent_parser], help="Add a new machine")
+    subparsers.add_parser("new", parents=[parent_parser], help="Add a new machine", formatter_class=HELP_FORMATTER)
 
-    p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete an existing machine")
+    p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete an existing machine", formatter_class=HELP_FORMATTER)
     p_del.add_argument("machine", nargs="?", default=False, help="Machine to delete")
 
-    p_info = subparsers.add_parser("info", parents=[parent_parser], help="Show detailed machine info")
+    p_info = subparsers.add_parser("info", parents=[parent_parser], help="Show detailed machine info", formatter_class=HELP_FORMATTER)
     p_info.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_start = subparsers.add_parser("start", parents=[parent_parser], help="Boot machine")
+    p_start = subparsers.add_parser("start", parents=[parent_parser], help="Boot machine", formatter_class=HELP_FORMATTER)
     p_start.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_vm = subparsers.add_parser("start-vm", parents=[parent_parser], help="Boot virtual instance of machine")
+    p_vm = subparsers.add_parser("start-vm", parents=[parent_parser], help="Boot virtual instance of machine", formatter_class=HELP_FORMATTER)
     p_vm.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_stop = subparsers.add_parser("stop", parents=[parent_parser], help="Stop machine")
+    p_stop = subparsers.add_parser("stop", parents=[parent_parser], help="Stop machine", formatter_class=HELP_FORMATTER)
     p_stop.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_clear = subparsers.add_parser("clear", parents=[parent_parser], help="Stop machine and clear state")
+    p_clear = subparsers.add_parser("clear", parents=[parent_parser], help="Stop machine and clear state", formatter_class=HELP_FORMATTER)
     p_clear.add_argument("machine", nargs="?", default=False, help="Target machine or 'all'")
 
-    p_conn = subparsers.add_parser("connect", parents=[parent_parser], help="SSH connect to machine")
+    p_conn = subparsers.add_parser("connect", parents=[parent_parser], help="SSH connect to machine", formatter_class=HELP_FORMATTER)
     p_conn.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_set = subparsers.add_parser("set", parents=[parent_parser], help="Set machine attributes")
+    p_set = subparsers.add_parser("set", parents=[parent_parser], help="Set machine attributes", formatter_class=HELP_FORMATTER)
     p_set.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_set.add_argument("attr", nargs="?", default=None, help="Attribute name")
     p_set.add_argument("val", nargs="*", default=[], help="Attribute values")
 
-    p_get = subparsers.add_parser("get", parents=[parent_parser], help="Get machine attribute")
+    p_get = subparsers.add_parser("get", parents=[parent_parser], help="Get machine attribute", formatter_class=HELP_FORMATTER)
     p_get.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_get.add_argument("attr", nargs="?", default=None, help="Attribute name")
 
-    p_res = subparsers.add_parser("reserve", parents=[parent_parser], help="Reserve machine")
+    p_res = subparsers.add_parser("reserve", parents=[parent_parser], help="Reserve machine", formatter_class=HELP_FORMATTER)
     p_res.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_rel = subparsers.add_parser("release", parents=[parent_parser], help="Release machine reservation")
+    p_rel = subparsers.add_parser("release", parents=[parent_parser], help="Release machine reservation", formatter_class=HELP_FORMATTER)
     p_rel.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_rel_f = subparsers.add_parser("release-forced", parents=[parent_parser], help="Force release machine reservation")
+    p_rel_f = subparsers.add_parser("release-forced", parents=[parent_parser], help="Force release machine reservation", formatter_class=HELP_FORMATTER)
     p_rel_f.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    p_wait = subparsers.add_parser("wait", parents=[parent_parser], help="Wait for machine availability")
+    p_wait = subparsers.add_parser("wait", parents=[parent_parser], help="Wait for machine availability", formatter_class=HELP_FORMATTER)
     p_wait.add_argument("machine", nargs="?", default=False, help="Target machine")
 
-    subparsers.add_parser("serve", parents=[parent_parser], help="Start iPXE boot server")
+    subparsers.add_parser("serve", parents=[parent_parser], help="Start iPXE boot server", formatter_class=HELP_FORMATTER)
 
-    p_ipxe = subparsers.add_parser("ipxe", parents=[parent_parser], help="Generate iPXE boot script")
+    p_ipxe = subparsers.add_parser("ipxe", parents=[parent_parser], help="Generate iPXE boot script", formatter_class=HELP_FORMATTER)
     p_ipxe.add_argument("mac", help="Machine MAC address")
     p_ipxe.add_argument("server_ip", help="Server IP address")
     p_ipxe.add_argument("port", nargs="?", default=None, help="Server port (optional)")
 
-    p_bootinfo = subparsers.add_parser("bootinfo", parents=[parent_parser], help="Output kernel, initrd, and append params")
+    p_bootinfo = subparsers.add_parser("bootinfo", parents=[parent_parser], help="Output kernel, initrd, and append params", formatter_class=HELP_FORMATTER)
     p_bootinfo.add_argument("mac", help="Machine MAC address")
     p_bootinfo.add_argument("server_ip", help="Server IP address")
     p_bootinfo.add_argument("port", nargs="?", default=None, help="Server port (optional)")
@@ -1129,11 +1144,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    parser = setup_cli_parser()
+
     if len(sys.argv) <= 1:
-        print_usage(sys.argv)
+        parser.print_help()
         sys.exit(0)
 
-    parser = setup_cli_parser()
     parsed_args = parser.parse_args()
 
     config.DEBUG = parsed_args.debug
@@ -1222,7 +1238,7 @@ def main() -> None:
     elif cmd == "bootinfo":
         cmd_bootinfo(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
     else:
-        print_usage(sys.argv)
+        parser.print_help()
         sys.exit(0)
 
 
