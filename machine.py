@@ -78,6 +78,15 @@ class Machine:
         self._lock: int = 0
         self._lock_stream: Optional[Any] = None
 
+    def _preprocess_cmd(self, cmd: str) -> str:
+        """Substitute parameters into startcmd, stopcmd, and powercmd."""
+        cmd = cmd.replace("$OS_ARCH", self.get_os_arch())
+        cmd = cmd.replace("$MAC", self.mac)
+        cmd = cmd.replace("$PID", str(os.getpid()))
+        cmd = cmd.replace("$MAMA_PATH", getattr(config, "MAMA_PATH", ""))
+        cmd = cmd.replace("$MAMA_HOST", getattr(config, "MAMA_HOST", ""))
+        return cmd
+
     # Acquire exclusive lock on the machine directory
     def lock(self) -> bool:
         if getattr(config, "DEBUG_LOCK", False):
@@ -227,10 +236,7 @@ class Machine:
         if not self.powercmd or not self.powercmd.strip():
             return "-"
 
-        cmd = self.powercmd
-        cmd = cmd.replace("$OS_ARCH", self.get_os_arch())
-        cmd = cmd.replace("$MAC", self.mac)
-        cmd = cmd.replace("$PID", str(os.getpid()))
+        cmd = self._preprocess_cmd(self.powercmd)
 
         try:
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
@@ -682,10 +688,7 @@ class Machine:
 
         if status == "offline":
             if self.startcmd:
-                startcmd = self.startcmd
-                startcmd = startcmd.replace("$OS_ARCH", self.get_os_arch())
-                startcmd = startcmd.replace("$MAC", self.mac)
-                startcmd = startcmd.replace("$PID", str(os.getpid()))
+                startcmd = self._preprocess_cmd(self.startcmd)
                 self.debug(f"Start command: {startcmd}")
                 subprocess.run(startcmd, shell=True)
 
@@ -822,11 +825,7 @@ class Machine:
 
         if self.wait_for_status("offline", self.stop_timeout):
             if self.stopcmd:
-                stopcmd = self.stopcmd
-                stopcmd = stopcmd.replace("$OS_ARCH", self.get_os_arch())
-                stopcmd = stopcmd.replace("$MAC", self.mac)
-                stopcmd = stopcmd.replace("$PID", str(os.getpid()))
-
+                stopcmd = self._preprocess_cmd(self.stopcmd)
                 self.debug(f"Stop command: {stopcmd}")
                 subprocess.run(stopcmd, shell=True)
 
