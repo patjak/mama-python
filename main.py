@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import pathlib
 import subprocess
@@ -361,52 +362,26 @@ def cmd_list_resources() -> None:
         out(f"{res}:\t{resources[res]}")
 
 
-def cmd_job(args: List[str]) -> None:
-    if len(args) < 4:
-        error("Not enough arguments")
-        return
-
-    cmd = args[3]
-
-    if cmd == "prepare":
-        if len(args) < 6:
-            error("Not enough arguments")
-            return
-        worker = args[6] if len(args) > 6 else "jobs"
-        arch = args[4]
-        os_name = args[5]
-
-        job = Job(args[2])
-        job.type = "prepare"
-        job.arch = arch
-        job.os = os_name
-        job.mach = worker
-        job.execute_prepare_job()
-
-    elif cmd == "run":
-        if len(args) < 7:
-            error("Not enough arguments")
-            return
-        job = Job(args[2])
-        job.type = "run"
-        job.mach = args[4]
-        job.arch = args[5]
-        job.os = args[6]
-        job.execute_run_job()
-
-    else:
-        error("Invalid command")
+def cmd_job_prepare(job_name: str, arch: str, os_name: str, worker: str = "jobs") -> None:
+    job = Job(job_name)
+    job.type = "prepare"
+    job.arch = arch
+    job.os = os_name
+    job.mach = worker
+    job.execute_prepare_job()
 
 
-def cmd_build_os(args: List[str]) -> None:
-    if len(args) < 4:
-        error("Not enough arguments")
-        return
+def cmd_job_run(job_name: str, machine: str, arch: str, os_name: str) -> None:
+    job = Job(job_name)
+    job.type = "run"
+    job.mach = machine
+    job.arch = arch
+    job.os = os_name
+    job.execute_run_job()
 
+
+def cmd_build_os(arch: str, os_name: str, builder: str = "os-builder") -> None:
     packages = Options.options.get("packages", "")
-    arch = args[2]
-    os_name = args[3]
-    builder = args[4] if len(args) > 4 else "os-builder"
 
     builder_mach = select_machine(builder)
     if not isinstance(builder_mach, Machine):
@@ -422,7 +397,7 @@ def cmd_build_os(args: List[str]) -> None:
     need_sudo = "" if Util.is_root() else "sudo"
 
     if mama_arch == arch and builder_mach.is_only_vm():
-        cmd_run_os_build_script(args)
+        cmd_run_os_build_script(arch, os_name)
     else:
         subprocess.run(
             f'{need_sudo} mama job os-builder run {builder} {arch} {os_name} --args="{packages}"',
@@ -430,7 +405,7 @@ def cmd_build_os(args: List[str]) -> None:
         )
 
 
-def cmd_run_os_build_script(args: List[str]) -> None:
+def cmd_run_os_build_script(arch: str, os_name: str) -> None:
     packages_str = ""
     packages = Options.options.get("packages", "").split()
     for package in packages:
@@ -438,13 +413,6 @@ def cmd_run_os_build_script(args: List[str]) -> None:
 
     if not Util.is_root():
         out("You must be root to run this command")
-
-    if len(args) < 4:
-        error("Not enough arguments")
-        return
-
-    arch = args[2]
-    os_name = args[3]
 
     desc_path = os.path.join(config.MAMA_PATH, "os-descriptions", "")
     archs = Util.get_directory_contents(desc_path, 1)
@@ -541,17 +509,12 @@ def cmd_run_os_build_script(args: List[str]) -> None:
     out("OS build completed")
 
 
-def cmd_install_os(args: List[str]) -> None:
+def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = None) -> None:
     if not Util.is_root():
         out("You must be root to run this command")
 
-    if len(args) < 5:
-        fatal("Not enough arguments")
-
-    machine = args[2]
-    arch = args[3]
-    os_name = args[4]
-    name = args[5] if len(args) > 5 else args[4]
+    if not name:
+        name = os_name
 
     mach = select_machine(machine)
     if not isinstance(mach, Machine):
@@ -582,17 +545,10 @@ def cmd_install_os(args: List[str]) -> None:
     out("OS install succeeded!")
 
 
-def cmd_delete_os(args: List[str]) -> None:
+def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
     need_sudo = "" if Util.is_root() else "sudo"
     if not Util.is_root():
         out("You must be root to run this command")
-
-    if len(args) < 5:
-        fatal("Not enough arguments")
-
-    machine = args[2]
-    arch = args[3]
-    os_name = args[4]
 
     mach = select_machine(machine)
     if not isinstance(mach, Machine):
@@ -609,7 +565,7 @@ def cmd_delete_os(args: List[str]) -> None:
         fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
 
 
-def cmd_copy_os(args: List[str]) -> None:
+def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name: str) -> None:
     no_overwrite = getattr(Options, "options", {}).get("no-overwrite", False)
 
     if not Util.is_root():
@@ -617,20 +573,13 @@ def cmd_copy_os(args: List[str]) -> None:
 
     need_sudo = "" if Util.is_root() else "sudo"
 
-    if len(args) < 6:
-        error("Not enough arguments")
-        return
-
-    src_mach = Machine.get_by_name(args[2])
+    src_mach = Machine.get_by_name(src_machine_name)
     if not src_mach:
-        fatal(f"Couldn't find machine with name {args[2]}")
+        fatal(f"Couldn't find machine with name {src_machine_name}")
 
-    arch = args[3]
-    os_name = args[4]
-
-    dst_mach = Machine.get_by_name(args[5])
+    dst_mach = Machine.get_by_name(dst_machine_name)
     if not dst_mach:
-        fatal(f"Couldn't find machine with name {args[5]}")
+        fatal(f"Couldn't find machine with name {dst_machine_name}")
 
     if src_mach.name == dst_mach.name:
         debug("Source and destination machines are the same. Skipping copy.")
@@ -838,18 +787,8 @@ def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tu
     return kernel, initrd, append
 
 
-def cmd_ipxe(argv: List[str]) -> None:
+def cmd_ipxe(mac: str, server_ip: str, port: Optional[Union[int, str]] = None) -> None:
     out("#!ipxe", timestamp=False)
-
-    if len(argv) < 3:
-        fatal("No MAC specified")
-    if len(argv) < 4:
-        fatal("No server IP specified")
-
-    mac = argv[2]
-    server_ip = argv[3]
-    port = argv[4] if len(argv) > 4 else None
-
     kernel, initrd, append = bootinfo(mac, server_ip, port)
 
     out(f"initrd {initrd} ||", timestamp=False)
@@ -857,16 +796,7 @@ def cmd_ipxe(argv: List[str]) -> None:
     out("boot || shell", timestamp=False)
 
 
-def cmd_bootinfo(argv: List[str]) -> None:
-    if len(argv) < 3:
-        fatal("No MAC specified")
-    if len(argv) < 4:
-        fatal("No server IP specified")
-
-    mac = argv[2]
-    server_ip = argv[3]
-    port = argv[4] if len(argv) > 4 else None
-
+def cmd_bootinfo(mac: str, server_ip: str, port: Optional[Union[int, str]] = None) -> None:
     kernel, initrd, append = bootinfo(mac, server_ip, port)
 
     out(initrd, timestamp=False)
@@ -874,21 +804,18 @@ def cmd_bootinfo(argv: List[str]) -> None:
     out(append, timestamp=False)
 
 
-def cmd_set(argv: List[str]) -> None:
-    arg_mach = argv[2] if len(argv) > 2 else False
-    mach = select_machine(arg_mach)
+def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None, val_list: Optional[List[str]] = None) -> None:
+    mach = select_machine(machine)
 
     if not isinstance(mach, Machine):
         return
 
-    if len(argv) <= 3:
+    if not attr:
         attr = Util.get_line(
             "{power | relay | os | kernel | resources | params | vmparams | start-timeout}: "
         ).strip()
-    else:
-        attr = argv[3]
 
-    val: Any = argv[4] if len(argv) > 4 else False
+    val: Any = " ".join(val_list) if val_list else False
 
     if attr == "power" and val is False:
         val = Util.get_line("Power (0-1): ").strip()
@@ -899,128 +826,259 @@ def cmd_set(argv: List[str]) -> None:
             val = select_os(mach)
         else:
             val = Os()
-            val.arch = argv[4] if len(argv) > 4 and argv[4] else "NONE"
-            val.os = argv[5] if len(argv) > 5 and argv[5] else "NONE"
+            val.arch = val_list[0] if val_list and len(val_list) > 0 else "NONE"
+            val.os = val_list[1] if val_list and len(val_list) > 1 else "NONE"
     elif attr == "kernel" and val is False:
         val = select_kernel(mach)
 
     mach.set(attr, val)
 
 
-def cmd_get(argv: List[str]) -> None:
-    arg_mach = argv[2] if len(argv) > 2 else False
-    mach = select_machine(arg_mach)
+def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None) -> None:
+    mach = select_machine(machine)
 
     if not isinstance(mach, Machine):
         return
 
-    if len(argv) <= 3:
+    if not attr:
         attr = Util.get_line(
             "{power | relay | os | params | resources | kernel | reservation | ip | mac}: "
         ).strip()
-    else:
-        attr = argv[3]
 
     out(str(mach.get(attr)))
 
 
-def parse_args(argv: List[str]) -> None:
-    arg = argv[2] if len(argv) > 2 else False
-    cmd = argv[1]
+def setup_cli_parser() -> argparse.ArgumentParser:
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parent_parser.add_argument("--debug-lock", dest="debug_lock", action="store_true", help="Enable lock debugging")
+    parent_parser.add_argument("--debug-pid", dest="debug_pid", action="store_true", help="Enable PID debugging")
+    parent_parser.add_argument("--args", type=str, default="", help="Additional arguments to pass along")
+    parent_parser.add_argument("--packages", type=str, default="", help="Additional packages to install")
+    parent_parser.add_argument("--no-ssh-timeout", dest="no_ssh_timeout", action="store_true", help="Allows SSH commands to run indefinitely")
+    parent_parser.add_argument("--no-retry", dest="no_retry", action="store_true", help="Don't retry starting machines multiple times")
+    parent_parser.add_argument("--no-overwrite", dest="no_overwrite", action="store_true", help="Skip overwriting existing OS on copy")
+
+    root_parser = argparse.ArgumentParser(prog="mama", description="MAMA Machine and OS Management Framework", parents=[parent_parser])
+    subparsers = root_parser.add_subparsers(dest="command", help="Available commands")
+
+    subparsers.add_parser("list", parents=[parent_parser], help="List configured machines")
+
+    p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes")
+    p_list_os.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_list_kernel = subparsers.add_parser("list-kernel", parents=[parent_parser], help="List available kernels")
+    p_list_kernel.add_argument("machine", help="Target machine")
+
+    subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources")
+
+    p_log = subparsers.add_parser("log", parents=[parent_parser], help="Print log file")
+    p_log.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_tail = subparsers.add_parser("tail", parents=[parent_parser], help="Tail log file")
+    p_tail.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_clear_log = subparsers.add_parser("clear-log", parents=[parent_parser], help="Clear log for machine")
+    p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    # Job subcommands
+    job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows")
+    job_p.add_argument("job_name", help="Job name")
+    job_sub = job_p.add_subparsers(dest="job_action", help="Job action")
+
+    prep_p = job_sub.add_parser("prepare", parents=[parent_parser], help="Execute prepare job")
+    prep_p.add_argument("arch", help="Target architecture")
+    prep_p.add_argument("os", help="Target OS")
+    prep_p.add_argument("worker", nargs="?", default="jobs", help="Worker machine name")
+
+    run_p = job_sub.add_parser("run", parents=[parent_parser], help="Execute run job")
+    run_p.add_argument("machine", help="Target machine")
+    run_p.add_argument("arch", help="Target architecture")
+    run_p.add_argument("os", help="Target OS")
+
+    # OS Build and Management
+    p_build = subparsers.add_parser("build-os", parents=[parent_parser], help="Build a deployable OS")
+    p_build.add_argument("arch", help="Architecture")
+    p_build.add_argument("os", help="OS name")
+    p_build.add_argument("builder", nargs="?", default="os-builder", help="Builder machine name")
+
+    p_run_script = subparsers.add_parser("run-os-build-script", parents=[parent_parser], help="Run local OS build script")
+    p_run_script.add_argument("arch", help="Architecture")
+    p_run_script.add_argument("os", help="OS name")
+
+    p_install = subparsers.add_parser("install-os", parents=[parent_parser], help="Install OS to a machine")
+    p_install.add_argument("machine", help="Target machine")
+    p_install.add_argument("arch", help="Architecture")
+    p_install.add_argument("os", help="Source OS name")
+    p_install.add_argument("name", nargs="?", default=None, help="Destination installation name")
+
+    p_del_os = subparsers.add_parser("delete-os", parents=[parent_parser], help="Delete an OS installed on a machine")
+    p_del_os.add_argument("machine", help="Target machine")
+    p_del_os.add_argument("arch", help="Architecture")
+    p_del_os.add_argument("os", help="OS name")
+
+    p_copy_os = subparsers.add_parser("copy-os", parents=[parent_parser], help="Copy OS from one machine to another")
+    p_copy_os.add_argument("src_mach", help="Source machine")
+    p_copy_os.add_argument("arch", help="Architecture")
+    p_copy_os.add_argument("os", help="OS name")
+    p_copy_os.add_argument("dst_mach", help="Destination machine")
+
+    # Machine operations
+    subparsers.add_parser("new", parents=[parent_parser], help="Add a new machine")
+
+    p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete an existing machine")
+    p_del.add_argument("machine", nargs="?", default=False, help="Machine to delete")
+
+    p_info = subparsers.add_parser("info", parents=[parent_parser], help="Show detailed machine info")
+    p_info.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_start = subparsers.add_parser("start", parents=[parent_parser], help="Boot machine")
+    p_start.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_vm = subparsers.add_parser("start-vm", parents=[parent_parser], help="Boot virtual instance of machine")
+    p_vm.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_stop = subparsers.add_parser("stop", parents=[parent_parser], help="Stop machine")
+    p_stop.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_clear = subparsers.add_parser("clear", parents=[parent_parser], help="Stop machine and clear state")
+    p_clear.add_argument("machine", nargs="?", default=False, help="Target machine or 'all'")
+
+    p_conn = subparsers.add_parser("connect", parents=[parent_parser], help="SSH connect to machine")
+    p_conn.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_set = subparsers.add_parser("set", parents=[parent_parser], help="Set machine attributes")
+    p_set.add_argument("machine", nargs="?", default=False, help="Target machine")
+    p_set.add_argument("attr", nargs="?", default=None, help="Attribute name")
+    p_set.add_argument("val", nargs="*", default=[], help="Attribute values")
+
+    p_get = subparsers.add_parser("get", parents=[parent_parser], help="Get machine attribute")
+    p_get.add_argument("machine", nargs="?", default=False, help="Target machine")
+    p_get.add_argument("attr", nargs="?", default=None, help="Attribute name")
+
+    p_res = subparsers.add_parser("reserve", parents=[parent_parser], help="Reserve machine")
+    p_res.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_rel = subparsers.add_parser("release", parents=[parent_parser], help="Release machine reservation")
+    p_rel.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_rel_f = subparsers.add_parser("release-forced", parents=[parent_parser], help="Force release machine reservation")
+    p_rel_f.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    p_wait = subparsers.add_parser("wait", parents=[parent_parser], help="Wait for machine availability")
+    p_wait.add_argument("machine", nargs="?", default=False, help="Target machine")
+
+    subparsers.add_parser("serve", parents=[parent_parser], help="Start iPXE boot server")
+
+    p_ipxe = subparsers.add_parser("ipxe", parents=[parent_parser], help="Generate iPXE boot script")
+    p_ipxe.add_argument("mac", help="Machine MAC address")
+    p_ipxe.add_argument("server_ip", help="Server IP address")
+    p_ipxe.add_argument("port", nargs="?", default=None, help="Server port (optional)")
+
+    p_bootinfo = subparsers.add_parser("bootinfo", parents=[parent_parser], help="Output kernel, initrd, and append params")
+    p_bootinfo.add_argument("mac", help="Machine MAC address")
+    p_bootinfo.add_argument("server_ip", help="Server IP address")
+    p_bootinfo.add_argument("port", nargs="?", default=None, help="Server port (optional)")
+
+    return root_parser
+
+
+def main() -> None:
+    if len(sys.argv) <= 1:
+        print_usage(sys.argv)
+        sys.exit(0)
+
+    parser = setup_cli_parser()
+    parsed_args = parser.parse_args()
+
+    config.DEBUG = parsed_args.debug
+    config.DEBUG_LOCK = parsed_args.debug_lock
+    config.DEBUG_PID = parsed_args.debug_pid
+
+    Options.options = {
+        "debug": parsed_args.debug,
+        "debug-lock": parsed_args.debug_lock,
+        "debug-pid": parsed_args.debug_pid,
+        "args": parsed_args.args or "",
+        "packages": parsed_args.packages or "",
+        "no-ssh-timeout": parsed_args.no_ssh_timeout,
+        "no-retry": parsed_args.no_retry,
+        "no-overwrite": parsed_args.no_overwrite,
+    }
+
+    if Settings.load() is False:
+        fatal(f"Failed to open settings file: {config.SETTINGS_FILE}\n")
+
+    cmd = parsed_args.command
 
     if cmd == "list":
         cmd_list()
     elif cmd == "list-os":
-        cmd_list_os(arg)
+        cmd_list_os(parsed_args.machine)
     elif cmd == "list-kernel":
-        if not arg:
-            fatal("No machine specified")
-        cmd_list_kernel(str(arg))
+        cmd_list_kernel(parsed_args.machine)
     elif cmd == "list-resources":
         cmd_list_resources()
     elif cmd == "job":
-        cmd_job(argv)
+        if parsed_args.job_action == "prepare":
+            cmd_job_prepare(parsed_args.job_name, parsed_args.arch, parsed_args.os, parsed_args.worker)
+        elif parsed_args.job_action == "run":
+            cmd_job_run(parsed_args.job_name, parsed_args.machine, parsed_args.arch, parsed_args.os)
+        else:
+            fatal("Invalid job command")
     elif cmd == "build-os":
-        cmd_build_os(argv)
+        cmd_build_os(parsed_args.arch, parsed_args.os, parsed_args.builder)
     elif cmd == "run-os-build-script":
-        cmd_run_os_build_script(argv)
+        cmd_run_os_build_script(parsed_args.arch, parsed_args.os)
     elif cmd == "install-os":
-        cmd_install_os(argv)
+        cmd_install_os(parsed_args.machine, parsed_args.arch, parsed_args.os, parsed_args.name)
     elif cmd == "delete-os":
-        cmd_delete_os(argv)
+        cmd_delete_os(parsed_args.machine, parsed_args.arch, parsed_args.os)
     elif cmd == "copy-os":
-        cmd_copy_os(argv)
+        cmd_copy_os(parsed_args.src_mach, parsed_args.arch, parsed_args.os, parsed_args.dst_mach)
     elif cmd == "new":
         cmd_new()
     elif cmd == "delete":
-        cmd_delete(arg)
+        cmd_delete(parsed_args.machine)
     elif cmd == "info":
-        cmd_info(arg)
+        cmd_info(parsed_args.machine)
     elif cmd == "log":
-        cmd_log(arg)
+        cmd_log(parsed_args.machine)
     elif cmd == "tail":
-        cmd_tail(arg)
+        cmd_tail(parsed_args.machine)
     elif cmd == "clear-log":
-        cmd_clear_log(arg)
+        cmd_clear_log(parsed_args.machine)
     elif cmd == "start":
-        cmd_start(arg)
+        cmd_start(parsed_args.machine)
     elif cmd == "start-vm":
-        cmd_start_vm(arg)
+        cmd_start_vm(parsed_args.machine)
     elif cmd == "stop":
-        cmd_stop(arg)
+        cmd_stop(parsed_args.machine)
     elif cmd == "clear":
-        cmd_clear(arg)
+        cmd_clear(parsed_args.machine)
     elif cmd == "connect":
-        cmd_connect(arg)
+        cmd_connect(parsed_args.machine)
     elif cmd == "set":
-        cmd_set(argv)
+        cmd_set(parsed_args.machine, parsed_args.attr, parsed_args.val)
     elif cmd == "get":
-        cmd_get(argv)
+        cmd_get(parsed_args.machine, parsed_args.attr)
     elif cmd == "reserve":
-        cmd_reserve(arg)
+        cmd_reserve(parsed_args.machine)
     elif cmd == "release":
-        cmd_release(arg)
+        cmd_release(parsed_args.machine)
     elif cmd == "release-forced":
-        cmd_release_forced(arg)
+        cmd_release_forced(parsed_args.machine)
     elif cmd == "wait":
-        cmd_wait(arg)
+        cmd_wait(parsed_args.machine)
     elif cmd == "serve":
         cmd_serve()
     elif cmd == "ipxe":
-        cmd_ipxe(argv)
+        cmd_ipxe(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
     elif cmd == "bootinfo":
-        cmd_bootinfo(argv)
+        cmd_bootinfo(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
     else:
-        out("Invalid command\n")
-
-
-def main() -> None:
-    opts_def = [
-        "args:",
-        "debug",
-        "debug-lock",
-        "debug-pid",
-        "packages:",
-        "no-ssh-timeout",
-        "no-retry",
-        "no-overwrite",
-    ]
-
-    cmds = Options.parse(sys.argv, opts_def)
-
-    config.DEBUG = "debug" in Options.options
-    config.DEBUG_LOCK = "debug-lock" in Options.options
-    config.DEBUG_PID = "debug-pid" in Options.options
-
-    if len(cmds) > 1:
-        if Settings.load() is False:
-            fatal(f"Failed to open settings file: {config.SETTINGS_FILE}\n")
-
-        parse_args(cmds)
+        print_usage(sys.argv)
         sys.exit(0)
-
-    print_usage(sys.argv)
-    sys.exit(0)
 
 
 if __name__ == "__main__":
