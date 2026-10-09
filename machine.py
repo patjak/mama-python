@@ -8,7 +8,6 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Union
 
-# Environment & helper stubs
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
@@ -240,16 +239,23 @@ class Machine:
                 return default
             elif hasattr(obj, key):
                 val = getattr(obj, key)
-                return str(val) if val is not None else default
+                if val is not None and not callable(val):
+                    return str(val)
+                return default
             elif isinstance(obj, dict) and key in obj:
                 val = obj[key]
-                return str(val) if val is not None else default
+                if val is not None and not callable(val):
+                    return str(val)
+                return default
             return default
 
         self.name = get_val("name")
         self.mac = get_val("mac").lower()
         self.ip = get_val("ip")
-        self._is_started = get_val("is_started")
+
+        is_started_raw = get_val("_is_started") or get_val("is_started")
+        self._is_started = is_started_raw if is_started_raw else "0"
+
         self.arch = get_val("arch")
         self.os = get_val("os")
         self.kernel = get_val("kernel")
@@ -802,7 +808,7 @@ class Machine:
     def stop(self, force: bool = False) -> bool:
         LOCK()
         self.load()
-        if not self.is_started() and not force:
+        if not self.is_started() and self.get_status() == "offline" and not force:
             UNLOCK()
             return True
         UNLOCK()

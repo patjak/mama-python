@@ -268,9 +268,12 @@ class Settings:
             m.addChild("mac", getattr(mach, "mac", ""))
             m.addChild("ip", getattr(mach, "ip", ""))
 
-            is_started_val = getattr(mach, "_is_started", getattr(mach, "is_started", ""))
-            if callable(is_started_val):
-                is_started_val = "1" if is_started_val() else "0"
+            is_started_val = getattr(mach, "_is_started", None)
+            if is_started_val is None or callable(is_started_val):
+                if hasattr(mach, "is_started") and callable(mach.is_started):
+                    is_started_val = "1" if mach.is_started() else "0"
+                else:
+                    is_started_val = "0"
             m.addChild("is_started", str(is_started_val))
 
             m.addChild("only_vm", getattr(mach, "only_vm", ""))
