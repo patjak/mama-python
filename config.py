@@ -1,15 +1,11 @@
 import pathlib
-import socket
 
 # Core Paths
 MAMA_PATH: str = "/usr/share/mama"
 SETTINGS_FILE: str = f"{MAMA_PATH}/mama.xml"
 
-# Network Defaults
-try:
-    MAMA_HOST: str = socket.gethostbyname(socket.gethostname())
-except Exception:
-    MAMA_HOST: str = "127.0.0.1"
+# Network Configuration
+MAMA_HOST: str = "192.168.2.1"
 
 # Debug Flags
 DEBUG: bool = False
@@ -33,5 +29,6 @@ RESOURCE_WAIT_TIMEOUT: int = 20 * 60 * 60  # Max wait time for resource acquisit
 from mpower import MpowerCtlDev
 
 MpowerCtlDev("mpower1", 6, "192.168.2.2")
-MpowerCtlDev("mpower1", 6, "192.168.2.3")
+MpowerCtlDev("mpower2", 6, "192.168.2.3")
 # UsbrlyCtlDev("usbrly1", 8, "/dev/ttyACM0")
+
