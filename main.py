@@ -544,26 +544,30 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
 
     subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
 
-    cmd = f"{need_sudo} kiwi-ng --debug system prepare --description {desc} --root {tmp_dir}{packages_str}"
-    out(cmd)
-    res = subprocess.run(cmd, shell=True)
+    console = Console()
+    with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
+        cmd = f"{need_sudo} kiwi-ng --debug system prepare --description {desc} --root {tmp_dir}{packages_str}"
+        out(cmd)
+        res = subprocess.run(cmd, shell=True)
+
     if res.returncode != 0:
         error("Failed to build os with kiwi")
         subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
         return
 
-    res = subprocess.run(f"{need_sudo} mount -t proc /proc {tmp_dir / 'proc'}", shell=True)
-    if res.returncode != 0:
-        error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
+    with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
+        res = subprocess.run(f"{need_sudo} mount -t proc /proc {tmp_dir / 'proc'}", shell=True)
+        if res.returncode != 0:
+            error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
+            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            return
 
-    res = subprocess.run(f"{need_sudo} mount -t sysfs sysfs {tmp_dir / 'sys'}", shell=True)
-    if res.returncode != 0:
-        error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
-        subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
+        res = subprocess.run(f"{need_sudo} mount -t sysfs sysfs {tmp_dir / 'sys'}", shell=True)
+        if res.returncode != 0:
+            error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
+            subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
+            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            return
 
     # Find kernel version for dracut
     res_k = subprocess.run(f"ls {tmp_dir / 'boot' / 'config-*'}", shell=True, capture_output=True, text=True)
@@ -576,7 +580,9 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
 
     kver = res_k.stdout.strip().split("config-")[1].splitlines()[0]
 
-    res = subprocess.run(f"{need_sudo} chroot {tmp_dir} dracut -f --kver {kver}", shell=True)
+    with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
+        res = subprocess.run(f"{need_sudo} chroot {tmp_dir} dracut -f --kver {kver}", shell=True)
+
     if res.returncode != 0:
         error("Failed to run dracut -f inside chroot")
         subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
@@ -651,7 +657,10 @@ def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = 
     if res.returncode != 0:
         fatal(f"Failed to create directory {dst}")
 
-    res = subprocess.run(f"{need_sudo} cp -r --reflink=auto {src} {dst}", shell=True)
+    console = Console()
+    with console.status(f"[bold cyan]Installing OS template {arch}/{os_name} to machine {machine}...[/bold cyan]"):
+        res = subprocess.run(f"{need_sudo} cp -r --reflink=auto {src} {dst}", shell=True)
+
     if res.returncode != 0:
         fatal("Failed to copy new OS to destination")
 
@@ -712,7 +721,10 @@ def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name
 
     subprocess.run(f"{need_sudo} rm -Rf {dst_os_dir}", shell=True)
     subprocess.run(f"{need_sudo} mkdir -p {dst_os_dir}", shell=True)
-    subprocess.run(f"{need_sudo} cp -r --reflink=auto {src_dir} {dst_arch_dir}", shell=True)
+
+    console = Console()
+    with console.status(f"[bold cyan]Copying OS {arch}/{os_name} from {src_mach.name} to {dst_mach.name}...[/bold cyan]"):
+        subprocess.run(f"{need_sudo} cp -r --reflink=auto {src_dir} {dst_arch_dir}", shell=True)
 
     dst_mach.unlock()
     src_mach.unlock()

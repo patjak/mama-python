@@ -6,6 +6,8 @@ import subprocess
 import time
 from typing import Any, List, Optional, Union
 
+from rich.console import Console
+
 # Environment & helper stubs
 import config
 from logger import Log, debug, error, fatal, out
@@ -60,8 +62,10 @@ class Job:
         if self._is_active_job(job_str, mach):
             self.out(f"Waiting for running job: {job_str}")
 
+        console = Console()
         while self._is_active_job(job_str, mach):
-            SLEEP_ON_LOCK(10)
+            with console.status(f"[bold yellow]Waiting for running job to finish: {job_str}...[/bold yellow]"):
+                SLEEP_ON_LOCK(10)
 
     def _preprocess(
         self,
@@ -124,13 +128,15 @@ class Job:
         if not worker_mach.is_idle():
             self.out(f"Waiting for job to finish: {worker_mach.job}")
 
+        console = Console()
         while not worker_mach.is_idle():
-            UNLOCK()
-            time.sleep(10)
-            LOCK()
-            worker_mach.load()
-            # Check for stale jobs while waiting
-            worker_mach.detect_and_clear_stale_job()
+            with console.status(f"[bold yellow]Waiting for worker machine '{worker_mach.name}' job to finish: {worker_mach.job}...[/bold yellow]"):
+                UNLOCK()
+                time.sleep(10)
+                LOCK()
+                worker_mach.load()
+                # Check for stale jobs while waiting
+                worker_mach.detect_and_clear_stale_job()
 
         prev_job = worker_mach.job
         prev_job_pid = worker_mach.job_pid
@@ -184,10 +190,12 @@ class Job:
         if not mach.is_idle():
             self.out(f"Waiting for job to finish: {mach.job}")
 
+        console = Console()
         while not mach.is_idle():
-            SLEEP_ON_LOCK(10)
-            mach.load()
-            mach.detect_and_clear_stale_job()
+            with console.status(f"[bold yellow]Waiting for target machine '{mach.name}' job to finish: {mach.job}...[/bold yellow]"):
+                SLEEP_ON_LOCK(10)
+                mach.load()
+                mach.detect_and_clear_stale_job()
 
         prev_job = mach.job
         prev_job_pid = mach.job_pid

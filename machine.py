@@ -608,20 +608,30 @@ class Machine:
         except (ValueError, TypeError):
             seconds_int = 0
 
-        if not dont_print:
-            self.debug(f"Waiting for status: {status}... ")
-
         start_time = time.time()
-        while self.get_status() != status:
-            time_passed = time.time() - start_time
-            time.sleep(1)
-            if time_passed >= seconds_int:
-                self.error(f"timed out after {seconds_int}s", no_eol=False, timestamp=False)
-                return False
+
+        if dont_print:
+            while self.get_status() != status:
+                time_passed = time.time() - start_time
+                time.sleep(1)
+                if seconds_int > 0 and time_passed >= seconds_int:
+                    return False
+            return True
+
+        console = Console()
+        with console.status(f"[bold yellow]({self.name}) Waiting for status: {status}...[/bold yellow]") as status_spinner:
+            while self.get_status() != status:
+                time_passed = time.time() - start_time
+                if seconds_int > 0 and time_passed >= seconds_int:
+                    self.error(f"timed out after {seconds_int}s", no_eol=False, timestamp=False)
+                    return False
+                time.sleep(1)
+                status_spinner.update(
+                    f"[bold yellow]({self.name}) Waiting for status: {status} ({int(time_passed)}s / {seconds_int}s)...[/bold yellow]"
+                )
 
         time_passed_int = int(time.time() - start_time)
-        if not dont_print:
-            self.debug(f"Status reached after {time_passed_int} s")
+        self.debug(f"Status reached after {time_passed_int} s")
         return True
 
     @staticmethod
@@ -647,40 +657,32 @@ class Machine:
         if not self.resources.strip():
             return True
 
-        resources = Machine.get_nested_resources(self.name).split()
+        console = Console()
+        start_time = time.time()
 
-        sleep = False
-        machs = self.get_all()
-        res_wait: List[str] = []
+        while True:
+            resources = Machine.get_nested_resources(self.name).split()
+            res_wait: List[str] = []
 
-        for mach in machs:
-            if not mach.is_started():
-                continue
-            if mach.name == self.name:
-                continue
-
-            mach_res = mach.resources.split()
-            for res in resources:
-                if res in mach_res:
-                    sleep = True
-                    if res not in res_wait:
+            machs = self.get_all()
+            for mach in machs:
+                if not mach.is_started() or mach.name == self.name:
+                    continue
+                mach_res = mach.resources.split()
+                for res in resources:
+                    if res in mach_res and res not in res_wait:
                         res_wait.append(res)
 
-        if sleep:
-            if timeout == self.resource_wait_timeout:
-                self.out("Waiting for resources: ", no_eol=True)
-                for res in res_wait:
-                    out(f"{res} ", no_eol=True, timestamp=False)
-                out("", no_eol=False, timestamp=False)
+            if not res_wait:
+                break
 
-            SLEEP_ON_LOCK(10)
+            wait_str = ", ".join(res_wait)
+            with console.status(f"[bold yellow]({self.name}) Waiting for locked resources: {wait_str}...[/bold yellow]"):
+                SLEEP_ON_LOCK(10)
 
-            timeout -= 10
-            if timeout <= 0:
+            if time.time() - start_time >= timeout:
                 self.error("Timed out waiting for resources")
                 return False
-
-            return self.wait_for_resources(timeout)
 
         self.out(f"Acquired resources: {self.resources}")
         return True
@@ -931,9 +933,11 @@ class Machine:
             pid_str = f", job_pid: {self.job_pid}" if self.job_pid else ""
             self.out(f"Waiting for machine to become idle ( started: {started_str}{job_str}{pid_str})")
 
+        console = Console()
         while not self.is_idle():
-            SLEEP_ON_LOCK(10)
-            self.load()
+            with console.status(f"[bold yellow]({self.name}) Waiting for machine to become idle...[/bold yellow]"):
+                SLEEP_ON_LOCK(10)
+                self.load()
         UNLOCK()
 
     def ssh_cmd(self, cmd: str) -> Union[int, bool]:
