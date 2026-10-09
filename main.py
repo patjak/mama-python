@@ -801,8 +801,21 @@ def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tu
     if mach.os == "NONE/NONE":
         fatal("#!pxe\necho Skipping ipxe. Using next boot option.\nexit 1")
 
-    path = f"http://{server_ip}/mama/machines/{mach.name}/{mach.os}"
-    root = f"root=nfs:{server_ip}:/machines/{mach.name}/{mach.os},rw,vers=4,nconnect=16"
+    # Extract clean IP and port
+    clean_ip = server_ip
+    if ":" in server_ip:
+        parts = server_ip.split(":", 1)
+        clean_ip = parts[0]
+        if not port:
+            port = parts[1]
+
+    if port is None:
+        port = os.environ.get("PORT", 8080)
+
+    http_host = f"{clean_ip}:{port}" if port and str(port) != "80" else clean_ip
+
+    path = f"http://{http_host}/mama/machines/{mach.name}/{mach.os}"
+    root = f"root=nfs:{clean_ip}:/machines/{mach.name}/{mach.os},rw,vers=4,nconnect=16"
 
     console = "console=tty0 console=ttyS0" if mach.is_vm() else ""
     net = f"rd.neednet=1 systemd.hostname={mach.name} ip=dhcp ifname=lan0:{mac}"
@@ -835,8 +848,9 @@ def cmd_ipxe(argv: List[str]) -> None:
 
     mac = argv[2]
     server_ip = argv[3]
+    port = argv[4] if len(argv) > 4 else None
 
-    kernel, initrd, append = bootinfo(mac, server_ip)
+    kernel, initrd, append = bootinfo(mac, server_ip, port)
 
     out(f"initrd {initrd} ||", timestamp=False)
     out(f"kernel {kernel} {append} ||", timestamp=False)
@@ -851,8 +865,9 @@ def cmd_bootinfo(argv: List[str]) -> None:
 
     mac = argv[2]
     server_ip = argv[3]
+    port = argv[4] if len(argv) > 4 else None
 
-    kernel, initrd, append = bootinfo(mac, server_ip)
+    kernel, initrd, append = bootinfo(mac, server_ip, port)
 
     out(initrd, timestamp=False)
     out(kernel, timestamp=False)

@@ -66,6 +66,15 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         host_header = self.headers.get("Host", "")
         server_ip = host_header.split(":")[0] if host_header else config.MAMA_HOST
+
+        if host_header and ":" in host_header:
+            try:
+                server_port = int(host_header.split(":")[1])
+            except ValueError:
+                server_port = getattr(self.server, "server_port", int(os.environ.get("PORT", 8080)))
+        else:
+            server_port = getattr(self.server, "server_port", int(os.environ.get("PORT", 8080)))
+
         client_ip = self.client_address[0]
 
         mac_param = params.get("MAC") or params.get("mac")
@@ -82,7 +91,7 @@ class iPXEHandler(BaseHTTPRequestHandler):
         Settings.load()
 
         try:
-            kernel, initrd, append = bootinfo(mac, server_ip)
+            kernel, initrd, append = bootinfo(mac, server_ip, server_port)
             response = (
                 f"#!ipxe\n"
                 f"initrd {initrd} ||\n"

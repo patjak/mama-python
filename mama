@@ -8,11 +8,12 @@ mama_path = pathlib.Path("/usr/share/mama")
 import config
 config.MAMA_PATH = str(mama_path)
 
-# Gracefully fall back if system hostname cannot be resolved
-try:
-    config.MAMA_HOST = socket.gethostbyname(socket.gethostname())
-except (socket.gaierror, OSError):
-    config.MAMA_HOST = "127.0.0.1"
+# Preserve MAMA_HOST from config.py if set; otherwise fall back to resolved hostname
+if not getattr(config, "MAMA_HOST", None):
+    try:
+        config.MAMA_HOST = socket.gethostbyname(socket.gethostname())
+    except (socket.gaierror, OSError):
+        config.MAMA_HOST = "127.0.0.1"
 
 config.SETTINGS_FILE = str(mama_path / "mama.xml")
 
