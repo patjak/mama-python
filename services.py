@@ -1,55 +1,253 @@
 from __future__ import annotations
 
-from typing import Any, Union
+import fcntl
+import html
+import os
+import pathlib
+import time
+import xml.dom.minidom
+import xml.etree.ElementTree as ET
+from typing import Any, List, Optional
 
-from ctldev import CtlDev
-from settings import IS_LOCKED, LOCK, SLEEP_ON_LOCK, UNLOCK, Settings
+import config
 from util import Util
+from ctldev import CtlDev
+from os_mgr import Os
 
 
-def select_machine(arg: Union[str, bool, None] = False) -> Any:
-    """Select or look up a machine by name or MAC address."""
-    import logger
-    from machine import Machine
+def sanitize_text(text: Optional[str]) -> str:
+    """
+    Recursively unescapes multi-layered XML/HTML entity over-encodings 
+    (e.g., &amp;amp;amp;quot;) back to clean, unescaped raw strings.
+    """
+    if not text:
+        return ""
+    prev = None
+    curr = str(text)
+    while curr != prev:
+        prev = curr
+        curr = html.unescape(curr)
+    return curr
 
-    logger.Log.set_file(False)
 
-    machs = Machine.get_all()
-    m_found = None
+class Settings:
+    settings: Optional[ET.Element] = None
+    _lock_stream: Optional[Any] = None
+    _lock_count: int = 0
 
-    if arg:
-        arg_str = str(arg)
-        for mach in machs:
-            if arg_str == mach.name or arg_str == mach.mac:
-                m_found = mach
+    @classmethod
+    def lock(cls) -> bool:
+        if cls._lock_count == 0:
+            settings_path = pathlib.Path(config.SETTINGS_FILE)
+            if not settings_path.exists():
+                return False
+            try:
+                cls._lock_stream = open(settings_path, "r+")
+                fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_EX)
+            except Exception:
+                return False
+        cls._lock_count += 1
+        return True
+
+    @classmethod
+    def unlock(cls) -> None:
+        if cls._lock_count > 0:
+            cls._lock_count -= 1
+            if cls._lock_count == 0 and cls._lock_stream is not None:
+                try:
+                    fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_UN)
+                    cls._lock_stream.close()
+                finally:
+                    cls._lock_stream = None
+
+    @classmethod
+    def is_lock_held(cls) -> bool:
+        return cls._lock_count > 0
+
+    @classmethod
+    def load(cls) -> bool:
+        settings_path = pathlib.Path(config.SETTINGS_FILE)
+        if not settings_path.exists():
+            return False
+
+        try:
+            tree = ET.parse(settings_path)
+            root = tree.getroot()
+
+            # Clean all multi-layered entity encodings in text nodes upon loading
+            for elem in root.iter():
+                if elem.text:
+                    elem.text = sanitize_text(elem.text)
+
+            cls.settings = root
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def save(cls) -> bool:
+        if cls.settings is None:
+            return False
+
+        settings_path = pathlib.Path(config.SETTINGS_FILE)
+
+        # Sanitize all elements prior to serialization
+        for elem in cls.settings.iter():
+            if elem.text:
+                elem.text = sanitize_text(elem.text)
+
+        try:
+            raw_xml = ET.tostring(cls.settings, encoding="utf-8")
+            dom = xml.dom.minidom.parseString(raw_xml)
+            
+            # Format nicely without extra unneeded blank lines
+            pretty_xml = dom.toprettyxml(indent="  ")
+            lines = [line for line in pretty_xml.splitlines() if line.strip()]
+            formatted_xml = "\n".join(lines) + "\n"
+
+            with open(settings_path, "w", encoding="utf-8") as f:
+                f.write(formatted_xml)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def update_machine(cls, mach: Any) -> bool:
+        cls.load()
+        if cls.settings is None:
+            return False
+
+        # Find target machine element by MAC or name
+        target_elem = None
+        for elem in cls.settings.findall("machine"):
+            mac_elem = elem.find("mac")
+            name_elem = elem.find("name")
+            mac_val = mac_elem.text if mac_elem is not None and mac_elem.text else ""
+            name_val = name_elem.text if name_elem is not None and name_elem.text else ""
+
+            if (mach.mac and mac_val.lower() == mach.mac.lower()) or (mach.name and name_val == mach.name):
+                target_elem = elem
                 break
 
-    if not m_found and arg:
-        logger.error(f"Machine with name/mac {arg} not found")
-        return False
+        if target_elem is None:
+            return cls.add_machine(mach)
 
-    if not arg:
-        from main import cmd_list
-        cmd_list()
-        selected = Util.ask_from_array(machs, "Machine: ")
-        if not selected:
+        fields = [
+            ("name", mach.name),
+            ("mac", mach.mac),
+            ("ip", getattr(mach, "ip", "")),
+            ("is_started", str(getattr(mach, "_is_started", "0"))),
+            ("only_vm", str(getattr(mach, "only_vm", "0"))),
+            ("arch", getattr(mach, "arch", "")),
+            ("os", getattr(mach, "os", "")),
+            ("kernel", getattr(mach, "kernel", "")),
+            ("pwr_dev", getattr(mach, "pwr_dev", "")),
+            ("pwr_slot", getattr(mach, "pwr_slot", "")),
+            ("rly_dev", getattr(mach, "rly_dev", "")),
+            ("rly_slot", getattr(mach, "rly_slot", "")),
+            ("reservation", getattr(mach, "reservation", "")),
+            ("resources", getattr(mach, "resources", "")),
+            ("boot_params", getattr(mach, "boot_params", "")),
+            ("vm_params", getattr(mach, "vm_params", "")),
+            ("job", getattr(mach, "job", "")),
+            ("job_pid", getattr(mach, "job_pid", "")),
+            ("startcmd", getattr(mach, "startcmd", "")),
+            ("stopcmd", getattr(mach, "stopcmd", "")),
+            ("start_timeout", str(getattr(mach, "start_timeout", "240"))),
+        ]
+
+        for tag, val in fields:
+            child = target_elem.find(tag)
+            if child is None:
+                child = ET.SubElement(target_elem, tag)
+            child.text = sanitize_text(str(val) if val is not None else "")
+
+        return cls.save()
+
+    @classmethod
+    def add_machine(cls, mach: Any) -> bool:
+        cls.load()
+        if cls.settings is None:
+            cls.settings = ET.Element("settings")
+
+        m_elem = ET.SubElement(cls.settings, "machine")
+        fields = [
+            ("name", mach.name),
+            ("mac", mach.mac),
+            ("ip", getattr(mach, "ip", "")),
+            ("is_started", str(getattr(mach, "_is_started", "0"))),
+            ("only_vm", str(getattr(mach, "only_vm", "0"))),
+            ("arch", getattr(mach, "arch", "")),
+            ("os", getattr(mach, "os", "")),
+            ("kernel", getattr(mach, "kernel", "")),
+            ("pwr_dev", getattr(mach, "pwr_dev", "")),
+            ("pwr_slot", getattr(mach, "pwr_slot", "")),
+            ("rly_dev", getattr(mach, "rly_dev", "")),
+            ("rly_slot", getattr(mach, "rly_slot", "")),
+            ("reservation", getattr(mach, "reservation", "")),
+            ("resources", getattr(mach, "resources", "")),
+            ("boot_params", getattr(mach, "boot_params", "")),
+            ("vm_params", getattr(mach, "vm_params", "")),
+            ("job", getattr(mach, "job", "")),
+            ("job_pid", getattr(mach, "job_pid", "")),
+            ("startcmd", getattr(mach, "startcmd", "")),
+            ("stopcmd", getattr(mach, "stopcmd", "")),
+            ("start_timeout", str(getattr(mach, "start_timeout", "240"))),
+        ]
+
+        for tag, val in fields:
+            child = ET.SubElement(m_elem, tag)
+            child.text = sanitize_text(str(val) if val is not None else "")
+
+        return cls.save()
+
+    @classmethod
+    def delete_machine(cls, mach: Any) -> bool:
+        cls.load()
+        if cls.settings is None:
             return False
-        m_found = selected
 
-    mach = Machine()
-    if m_found:
-        mach.fill_from_xmlobj(m_found)
-        logger.Log.set_file(mach.name)
+        to_remove = []
+        for elem in cls.settings.findall("machine"):
+            mac_elem = elem.find("mac")
+            name_elem = elem.find("name")
+            mac_val = mac_elem.text if mac_elem is not None and mac_elem.text else ""
+            name_val = name_elem.text if name_elem is not None and name_elem.text else ""
 
-    return mach
+            if (mach.mac and mac_val.lower() == mach.mac.lower()) or (mach.name and name_val == mach.name):
+                to_remove.append(elem)
+
+        for elem in to_remove:
+            cls.settings.remove(elem)
+
+        return cls.save()
+
+
+def LOCK() -> None:
+    Settings.lock()
+
+
+def UNLOCK() -> None:
+    Settings.unlock()
+
+
+def IS_LOCKED() -> bool:
+    return Settings.is_lock_held()
+
+
+def SLEEP_ON_LOCK(seconds: int) -> None:
+    UNLOCK()
+    time.sleep(seconds)
+    LOCK()
+
+
+def select_machine(arg: Any = False) -> Any:
+    from main import select_machine as _select_machine
+    return _select_machine(arg)
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy-load Machine and Os to prevent circular import loops."""
     if name == "Machine":
         from machine import Machine
         return Machine
-    if name == "Os":
-        from os_mgr import Os
-        return Os
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

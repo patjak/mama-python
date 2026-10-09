@@ -152,7 +152,15 @@ class Machine:
     def get_all(cls) -> List[Machine]:
         machs: List[Machine] = []
         Settings.load()
-        machines_xml = getattr(Settings.settings, "machine", [])
+        
+        if Settings.settings is not None:
+            if hasattr(Settings.settings, "findall"):
+                machines_xml = Settings.settings.findall("machine")
+            else:
+                machines_xml = getattr(Settings.settings, "machine", [])
+        else:
+            machines_xml = []
+
         for m in machines_xml:
             mach = cls()
             mach.fill_from_xmlobj(m)
