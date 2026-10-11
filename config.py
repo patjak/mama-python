@@ -6,6 +6,8 @@ SETTINGS_FILE: str = f"{MAMA_PATH}/mama.xml"
 
 # Network Configuration
 MAMA_HOST: str = "192.168.2.1"
+TFTP_PORT: int = 69
+TFTP_DIR: str = f"{MAMA_PATH}/tftp"
 
 # Debug Flags
 DEBUG: bool = False
