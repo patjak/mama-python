@@ -16,7 +16,7 @@ sys.path.insert(0, str(script_dir))
 
 import config
 from main import bootinfo
-from services import Settings
+from repository import MachineRepository
 
 
 def clean_mac(mac_str: str) -> str:
@@ -319,7 +319,7 @@ class iPXEHandler(BaseHTTPRequestHandler):
             self._send_response(200, response)
             return
 
-        Settings.load()
+        MachineRepository.load()
 
         try:
             kernel, initrd, append = bootinfo(mac, server_ip, server_port)
@@ -367,7 +367,7 @@ def generate_autoexec_ipxe(mama_base: pathlib.Path, server_ip: str, server_port:
         content = (
             "#!ipxe\n"
             "dhcp\n"
-            f"chain http://{http_host}/boot.py?mac=${{mac}}\n"
+            f"chain http://{http_host}/boot.py?mac=\${{mac}}\n"
         )
 
         autoexec_path.write_text(content, encoding="utf-8")

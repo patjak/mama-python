@@ -21,19 +21,19 @@ except ImportError:
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
-from services import Os, Settings, Util
+from repository import Os, MachineRepository, Util
 
 
 def LOCK() -> None:
-    Settings.lock()
+    MachineRepository.lock()
 
 
 def UNLOCK() -> None:
-    Settings.unlock()
+    MachineRepository.unlock()
 
 
 def IS_LOCKED() -> bool:
-    return Settings.is_lock_held()
+    return MachineRepository.is_lock_held()
 
 
 def SLEEP_ON_LOCK(seconds: int) -> None:
@@ -165,13 +165,13 @@ class Machine:
     @classmethod
     def get_all(cls) -> List[Machine]:
         machs: List[Machine] = []
-        Settings.load()
+        MachineRepository.load()
 
-        if Settings.settings is not None:
-            if hasattr(Settings.settings, "findall"):
-                machines_xml = Settings.settings.findall("machine")
+        if MachineRepository.settings is not None:
+            if hasattr(MachineRepository.settings, "findall"):
+                machines_xml = MachineRepository.settings.findall("machine")
             else:
-                machines_xml = getattr(Settings.settings, "machine", [])
+                machines_xml = getattr(MachineRepository.settings, "machine", [])
         else:
             machines_xml = []
 
@@ -342,7 +342,7 @@ class Machine:
             self.start_timeout = self.start_timeout_default
 
     def save(self) -> None:
-        Settings.update_machine(self)
+        MachineRepository.update_machine(self)
 
     def load(self) -> None:
         for mach in Machine.get_all():

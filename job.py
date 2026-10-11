@@ -12,7 +12,7 @@ from rich.console import Console
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
-from services import (
+from repository import (
     IS_LOCKED,
     LOCK,
     SLEEP_ON_LOCK,

@@ -26,7 +26,7 @@ def sanitize_text(text: Optional[str]) -> str:
     return curr
 
 
-class Settings:
+class MachineRepository:
     settings: Optional[ET.Element] = None
     _lock_stream: Optional[Any] = None
     _lock_count: int = 0
@@ -213,16 +213,20 @@ class Settings:
         return cls.save()
 
 
+# Backward compatibility alias
+Settings = MachineRepository
+
+
 def LOCK() -> None:
-    Settings.lock()
+    MachineRepository.lock()
 
 
 def UNLOCK() -> None:
-    Settings.unlock()
+    MachineRepository.unlock()
 
 
 def IS_LOCKED() -> bool:
-    return Settings.is_lock_held()
+    return MachineRepository.is_lock_held()
 
 
 def SLEEP_ON_LOCK(seconds: int) -> None:

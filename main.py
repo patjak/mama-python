@@ -40,13 +40,13 @@ from logger import Log, debug, error, fatal, out
 from machine import Machine
 from options import Options
 from os_mgr import Arch, Os
-from services import Settings, Util
+from repository import MachineRepository, Util
 
 
 def machine_completer(prefix: str, parsed_args: Any, **kwargs: Any) -> List[str]:
     """Dynamic autocomplete callback for machine names."""
     try:
-        Settings.load()
+        MachineRepository.load()
         machs = Machine.get_all()
         return [m.name for m in machs if m.name.startswith(prefix)]
     except Exception:
@@ -457,7 +457,7 @@ def cmd_new() -> None:
     subprocess.run(f"sudo touch {path / 'lock'}", shell=True)
     subprocess.run(f"sudo chmod 666 {path / 'lock'}", shell=True)
 
-    Settings.add_machine(m)
+    MachineRepository.add_machine(m)
     out("New machine created")
 
 
@@ -799,7 +799,7 @@ def cmd_delete(arg: Union[str, bool]) -> None:
         if not name:
             error("Machine name is NULL")
             return
-        Settings.delete_machine(mach)
+        MachineRepository.delete_machine(mach)
         path = pathlib.Path(config.MAMA_PATH) / "machines" / name
         if Util.is_root():
             subprocess.run(f"rm -Rf {path}", shell=True)
@@ -931,7 +931,7 @@ def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tu
     if not mach:
         new_mach = Machine(name=mac, mac=mac)
         new_mach.only_vm = 0
-        Settings.add_machine(new_mach)
+        MachineRepository.add_machine(new_mach)
         fatal(f"Machine is not configured in Mama! Added as new machine: {mac}")
 
     if mach.os == "NONE/NONE":
@@ -1260,7 +1260,7 @@ def main() -> None:
         "no-overwrite": parsed_args.no_overwrite,
     }
 
-    if Settings.load() is False:
+    if MachineRepository.load() is False:
         fatal(f"Failed to open settings file: {config.SETTINGS_FILE}\n")
 
     cmd = parsed_args.command
