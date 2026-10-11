@@ -19,6 +19,13 @@ from main import bootinfo
 from services import Settings
 
 
+def clean_mac(mac_str: str) -> str:
+    """Normalize MAC address by stripping whitespace, leading slashes/backslashes, and converting hyphens to colons."""
+    if not mac_str:
+        return ""
+    return mac_str.strip().lstrip("\\/\"'").replace("-", ":").lower()
+
+
 def get_mac_from_ip(client_ip: str) -> str:
     """Extract client MAC address from neighbor ARP table given client IP."""
     if not client_ip:
@@ -30,7 +37,7 @@ def get_mac_from_ip(client_ip: str) -> str:
             first_line = res.stdout.strip().splitlines()[0]
             parts = [p for p in first_line.split() if p]
             if len(parts) >= 5:
-                return parts[4].replace("-", ":").lower()
+                return clean_mac(parts[4])
     except Exception:
         pass
     return ""
@@ -124,7 +131,12 @@ class TFTPServer:
             self._send_error(client_addr, 1, f"File not found: {raw_filename}")
             return
 
-        sys.stderr.write(f"[boot.py] [TFTP] Serving {raw_filename} ({target_file.stat().st_size} bytes) to {client_addr[0]}\n")
+        # Clarify probe vs transfer in log output
+        if options.get("tsize") == "0":
+            sys.stderr.write(f"[boot.py] [TFTP] Size probe for {raw_filename} ({target_file.stat().st_size} bytes) from {client_addr[0]}\n")
+        else:
+            sys.stderr.write(f"[boot.py] [TFTP] Transferring {raw_filename} ({target_file.stat().st_size} bytes) to {client_addr[0]}\n")
+
         self._transfer_file(target_file, client_addr, options)
 
     def _transfer_file(self, file_path: pathlib.Path, client_addr: tuple[str, int], options: dict[str, str]) -> None:
@@ -298,9 +310,9 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         mac_param = params.get("MAC") or params.get("mac")
         if mac_param and mac_param[0]:
-            mac = mac_param[0].replace("-", ":").lower()
+            mac = clean_mac(mac_param[0])
         else:
-            mac = get_mac_from_ip(client_ip).replace("-", ":").lower()
+            mac = clean_mac(get_mac_from_ip(client_ip))
 
         if not mac:
             response = "#!ipxe\necho No MAC specified\nshell\n"
