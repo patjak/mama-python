@@ -30,14 +30,14 @@ def get_mac_from_ip(client_ip: str) -> str:
             first_line = res.stdout.strip().splitlines()[0]
             parts = [p for p in first_line.split() if p]
             if len(parts) >= 5:
-                return parts[4]
+                return parts[4].replace("-", ":").lower()
     except Exception:
         pass
     return ""
 
 
 class TFTPServer:
-    """Read-only TFTP server supporting RFC 1350 and RFC 2347 option negotiation."""
+    """Read-only TFTP server supporting RFC 1350, RFC 2347, and RFC 7440 (Windowsize)."""
 
     def __init__(self, host: str, port: int, root_dir: pathlib.Path) -> None:
         self.host = host
@@ -133,6 +133,7 @@ class TFTPServer:
 
         file_size = file_path.stat().st_size
         blksize = 512
+        windowsize = 1
 
         oack_opts: dict[str, str] = {}
         if "blksize" in options:
@@ -145,6 +146,14 @@ class TFTPServer:
 
         if "tsize" in options:
             oack_opts["tsize"] = str(file_size)
+
+        if "windowsize" in options:
+            try:
+                requested_ws = int(options["windowsize"])
+                windowsize = min(max(1, requested_ws), 16)
+                oack_opts["windowsize"] = str(windowsize)
+            except ValueError:
+                pass
 
         try:
             with open(file_path, "rb") as f:
@@ -171,20 +180,45 @@ class TFTPServer:
                         return
 
                 while True:
-                    f.seek((block_num - 1) * blksize)
-                    chunk = f.read(blksize)
-                    data_pkt = struct.pack(">HH", 3, block_num & 0xFFFF) + chunk
+                    sent_in_window = 0
+                    last_chunk_is_eof = False
 
+                    # RFC 7440: Transmit up to `windowsize` consecutive DATA blocks
+                    for i in range(windowsize):
+                        curr_blk = block_num + i
+                        f.seek((curr_blk - 1) * blksize)
+                        chunk = f.read(blksize)
+
+                        if curr_blk > 1 and (curr_blk - 1) * blksize > file_size:
+                            break
+
+                        data_pkt = struct.pack(">HH", 3, curr_blk & 0xFFFF) + chunk
+                        session_sock.sendto(data_pkt, client_addr)
+                        sent_in_window += 1
+
+                        if len(chunk) < blksize:
+                            last_chunk_is_eof = True
+                            break
+
+                    if sent_in_window == 0:
+                        break
+
+                    last_sent_blk = block_num + sent_in_window - 1
+
+                    # Wait for ACK acknowledging blocks sent in this window
                     ack_received = False
                     for attempt in range(5):
-                        session_sock.sendto(data_pkt, client_addr)
                         try:
                             resp, _ = session_sock.recvfrom(512)
                             if len(resp) >= 4:
                                 op, ack_blk = struct.unpack(">HH", resp[:4])
-                                if op == 4 and ack_blk == (block_num & 0xFFFF):
-                                    ack_received = True
-                                    break
+                                if op == 4:
+                                    prev_blk_16 = (block_num - 1) & 0xFFFF
+                                    diff = (ack_blk - prev_blk_16) & 0xFFFF
+                                    if 1 <= diff <= sent_in_window:
+                                        block_num += diff
+                                        ack_received = True
+                                        break
                                 elif op == 5:
                                     return
                         except socket.timeout:
@@ -194,10 +228,8 @@ class TFTPServer:
                         sys.stderr.write(f"[boot.py] [TFTP] Transfer timed out for {client_addr[0]}\n")
                         return
 
-                    if len(chunk) < blksize:
+                    if last_chunk_is_eof and block_num > last_sent_blk:
                         break
-
-                    block_num += 1
 
         except Exception as e:
             sys.stderr.write(f"[boot.py] [TFTP] Error transferring file to {client_addr[0]}: {e}\n")
@@ -266,9 +298,9 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         mac_param = params.get("MAC") or params.get("mac")
         if mac_param and mac_param[0]:
-            mac = mac_param[0]
+            mac = mac_param[0].replace("-", ":").lower()
         else:
-            mac = get_mac_from_ip(client_ip)
+            mac = get_mac_from_ip(client_ip).replace("-", ":").lower()
 
         if not mac:
             response = "#!ipxe\necho No MAC specified\nshell\n"
@@ -312,6 +344,30 @@ class iPXEHandler(BaseHTTPRequestHandler):
         sys.stderr.write(f"[boot.py] {self.address_string()} - {format % args}\n")
 
 
+def generate_autoexec_ipxe(mama_base: pathlib.Path, server_ip: str, server_port: int) -> None:
+    """Automatically create or update autoexec.ipxe with the current host and port."""
+    tftp_dir = mama_base / "tftp"
+    try:
+        tftp_dir.mkdir(parents=True, exist_ok=True)
+        autoexec_path = tftp_dir / "autoexec.ipxe"
+
+        http_host = f"{server_ip}:{server_port}" if str(server_port) != "80" else server_ip
+        content = (
+            "#!ipxe\n"
+            "dhcp\n"
+            f"chain http://{http_host}/boot.py?mac=${{mac}}\n"
+        )
+
+        autoexec_path.write_text(content, encoding="utf-8")
+        try:
+            os.chmod(autoexec_path, 0o644)
+        except Exception:
+            pass
+        sys.stderr.write(f"[boot.py] Generated {autoexec_path} pointing to http://{http_host}\n")
+    except Exception as e:
+        sys.stderr.write(f"[boot.py] Warning: Could not write autoexec.ipxe: {e}\n")
+
+
 def main() -> None:
     port = int(os.environ.get("PORT", 8080))
     tftp_port = int(os.environ.get("TFTP_PORT", getattr(config, "TFTP_PORT", 69)))
@@ -319,7 +375,10 @@ def main() -> None:
 
     mama_base = pathlib.Path(config.MAMA_PATH).resolve()
 
-    # Start TFTP Server thread
+    # Automatically write autoexec.ipxe on startup
+    generate_autoexec_ipxe(mama_base, bind_addr, port)
+
+    # Start TFTP Server thread bound to MAMA_HOST interface
     tftp_server = TFTPServer(bind_addr, tftp_port, mama_base)
     tftp_server.start()
 
