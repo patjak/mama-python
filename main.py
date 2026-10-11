@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import os
 import pathlib
 import subprocess
@@ -320,7 +321,7 @@ def cmd_list() -> None:
 
     machs = Machine.get_all()
 
-    for i, mach in enumerate(machs, start=1):
+    def fetch_mach_info(mach: Machine) -> dict:
         ip = mach.get_ip() or "-"
         status = mach.get_status()
 
@@ -338,16 +339,32 @@ def cmd_list() -> None:
         if mach.job and mach.is_job_stale():
             job_str = f"{mach.job} [bold red][STALE][/bold red]"
 
+        return {
+            "name": mach.name,
+            "ip": ip,
+            "mac": mach.mac,
+            "status_str": status_str,
+            "started_str": started_str,
+            "power": mach.get_power(),
+            "vm_str": vm_str,
+            "job_str": job_str,
+        }
+
+    max_workers = min(32, len(machs)) if machs else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(fetch_mach_info, machs))
+
+    for i, data in enumerate(results, start=1):
         table.add_row(
             str(i),
-            mach.name,
-            ip,
-            mach.mac,
-            status_str,
-            started_str,
-            mach.get_power(),
-            vm_str,
-            job_str,
+            data["name"],
+            data["ip"],
+            data["mac"],
+            data["status_str"],
+            data["started_str"],
+            data["power"],
+            data["vm_str"],
+            data["job_str"],
         )
 
     console.print(table)

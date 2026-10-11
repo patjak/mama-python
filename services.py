@@ -4,6 +4,7 @@ import fcntl
 import html
 import os
 import pathlib
+import threading
 import time
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
@@ -15,10 +16,6 @@ from os_mgr import Os
 
 
 def sanitize_text(text: Optional[str]) -> str:
-    """
-    Recursively unescapes multi-layered XML/HTML entity over-encodings 
-    (e.g., &amp;amp;amp;quot;) back to clean, unescaped raw strings.
-    """
     if not text:
         return ""
     prev = None
@@ -33,35 +30,39 @@ class Settings:
     settings: Optional[ET.Element] = None
     _lock_stream: Optional[Any] = None
     _lock_count: int = 0
+    _rlock = threading.RLock()
 
     @classmethod
     def lock(cls) -> bool:
-        if cls._lock_count == 0:
-            settings_path = pathlib.Path(config.SETTINGS_FILE)
-            if not settings_path.exists():
-                return False
-            try:
-                cls._lock_stream = open(settings_path, "r+")
-                fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_EX)
-            except Exception:
-                return False
-        cls._lock_count += 1
-        return True
+        with cls._rlock:
+            if cls._lock_count == 0:
+                settings_path = pathlib.Path(config.SETTINGS_FILE)
+                if not settings_path.exists():
+                    return False
+                try:
+                    cls._lock_stream = open(settings_path, "r+")
+                    fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_EX)
+                except Exception:
+                    return False
+            cls._lock_count += 1
+            return True
 
     @classmethod
     def unlock(cls) -> None:
-        if cls._lock_count > 0:
-            cls._lock_count -= 1
-            if cls._lock_count == 0 and cls._lock_stream is not None:
-                try:
-                    fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_UN)
-                    cls._lock_stream.close()
-                finally:
-                    cls._lock_stream = None
+        with cls._rlock:
+            if cls._lock_count > 0:
+                cls._lock_count -= 1
+                if cls._lock_count == 0 and cls._lock_stream is not None:
+                    try:
+                        fcntl.flock(cls._lock_stream.fileno(), fcntl.LOCK_UN)
+                        cls._lock_stream.close()
+                    finally:
+                        cls._lock_stream = None
 
     @classmethod
     def is_lock_held(cls) -> bool:
-        return cls._lock_count > 0
+        with cls._rlock:
+            return cls._lock_count > 0
 
     @classmethod
     def load(cls) -> bool:
@@ -73,7 +74,6 @@ class Settings:
             tree = ET.parse(settings_path)
             root = tree.getroot()
 
-            # Clean all multi-layered entity encodings in text nodes upon loading
             for elem in root.iter():
                 if elem.text:
                     elem.text = sanitize_text(elem.text)
@@ -90,7 +90,6 @@ class Settings:
 
         settings_path = pathlib.Path(config.SETTINGS_FILE)
 
-        # Sanitize all elements prior to serialization
         for elem in cls.settings.iter():
             if elem.text:
                 elem.text = sanitize_text(elem.text)
@@ -99,7 +98,6 @@ class Settings:
             raw_xml = ET.tostring(cls.settings, encoding="utf-8")
             dom = xml.dom.minidom.parseString(raw_xml)
             
-            # Format nicely without extra unneeded blank lines
             pretty_xml = dom.toprettyxml(indent="  ")
             lines = [line for line in pretty_xml.splitlines() if line.strip()]
             formatted_xml = "\n".join(lines) + "\n"
@@ -116,7 +114,6 @@ class Settings:
         if cls.settings is None:
             return False
 
-        # Find target machine element by MAC or name
         target_elem = None
         for elem in cls.settings.findall("machine"):
             mac_elem = elem.find("mac")
