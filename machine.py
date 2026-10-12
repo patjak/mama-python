@@ -309,7 +309,7 @@ class Machine:
         fatal("Failed to load machine")
 
     def clear(self) -> None:
-        """Atomically clear IP and started status in DB."""
+        """Atomically clear IP, started status, and boot_params in DB."""
         self.ip = ""
         self._is_started = "0"
         MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0"})
@@ -552,11 +552,17 @@ class Machine:
             self.resources = str(val)
             MachineRepository.update_fields(self.name, {"resources": str(val)})
         elif attr == "params":
-            out(f"Current boot parameters: {self.boot_params}")
-            if not val:
+            out(f"Current boot parameters: {self.boot_params if self.boot_params else '(none)'}")
+            if val is False:
                 val = prompt_text("Enter new boot parameters:")
-            self.boot_params = str(val)
-            MachineRepository.update_fields(self.name, {"boot_params": str(val)})
+
+            val_str = str(val).strip()
+            if val_str.lower() in ("none", "clear", '""', "''"):
+                val_str = ""
+
+            self.boot_params = val_str
+            MachineRepository.update_fields(self.name, {"boot_params": val_str})
+            self.out(f"Setting boot parameters to: {self.boot_params if self.boot_params else '(none)'}")
         elif attr == "vmparams":
             out(f"Current VM parameters: {self.vm_params}")
             if not val:
