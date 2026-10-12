@@ -21,27 +21,29 @@ except ImportError:
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
-from repository import Os, MachineRepository, Util
+from os_mgr import Os
+from repository import MachineRepository
+from util import Util
 
 
 def LOCK() -> None:
-    MachineRepository.lock()
+    """Backwards-compatibility lock wrapper."""
+    pass
 
 
 def UNLOCK() -> None:
-    MachineRepository.unlock()
+    """Backwards-compatibility unlock wrapper."""
+    pass
 
 
 def IS_LOCKED() -> bool:
-    return MachineRepository.is_lock_held()
+    """Backwards-compatibility lock status check."""
+    return False
 
 
 def SLEEP_ON_LOCK(seconds: int) -> None:
-    UNLOCK()
-    if IS_LOCKED():
-        fatal("Sleeping while lock is held")
+    """Backwards-compatibility sleep wrapper."""
     time.sleep(seconds)
-    LOCK()
 
 
 class Machine:
@@ -96,8 +98,8 @@ class Machine:
         cmd = cmd.replace("$MAMA_HOST", getattr(config, "MAMA_HOST", ""))
         return cmd
 
-    # Acquire exclusive lock on the machine directory
     def lock(self) -> bool:
+        """Acquire exclusive lock on the machine hardware lock file and RLock."""
         if getattr(config, "DEBUG_LOCK", False):
             msg = f"PID {os.getpid()}: {self.name}: Acquiring machine lock: {self._lock + 1}\n"
             lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
@@ -105,11 +107,9 @@ class Machine:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 f.write(msg)
 
-        # 1. Acquire thread-level reentrant lock for this specific machine name
         rlock = Machine._get_rlock(self.name)
         rlock.acquire()
 
-        # 2. Acquire process-level file lock on initial outer lock call
         if self._lock == 0:
             if self._lock_stream is not None:
                 rlock.release()
@@ -117,6 +117,7 @@ class Machine:
 
             lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
             try:
+                lock_file.parent.mkdir(parents=True, exist_ok=True)
                 self._lock_stream = open(lock_file, "a+")
                 fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_EX)
             except Exception as e:
@@ -126,8 +127,8 @@ class Machine:
         self._lock += 1
         return True
 
-    # Release exclusive lock on the machine directory
     def unlock(self) -> None:
+        """Release exclusive lock on the machine directory."""
         if getattr(config, "DEBUG_LOCK", False):
             msg = f"PID {os.getpid()}: {self.name}: Releasing machine lock: {self._lock}\n"
             lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
@@ -140,7 +141,6 @@ class Machine:
 
         self._lock -= 1
 
-        # 1. Release process-level file lock when outermost lock releases
         if self._lock == 0 and self._lock_stream is not None:
             try:
                 fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
@@ -148,7 +148,6 @@ class Machine:
             finally:
                 self._lock_stream = None
 
-        # 2. Release thread-level reentrant lock
         rlock = Machine._get_rlock(self.name)
         rlock.release()
 
@@ -164,39 +163,164 @@ class Machine:
 
     @classmethod
     def get_all(cls) -> List[Machine]:
+        """Query all machines directly from SQLite."""
         machs: List[Machine] = []
-        MachineRepository.load()
-
-        if MachineRepository.settings is not None:
-            if hasattr(MachineRepository.settings, "findall"):
-                machines_xml = MachineRepository.settings.findall("machine")
-            else:
-                machines_xml = getattr(MachineRepository.settings, "machine", [])
-        else:
-            machines_xml = []
-
-        for m in machines_xml:
+        rows = MachineRepository.get_all()
+        for row in rows:
             mach = cls()
-            mach.fill_from_xmlobj(m)
+            mach.fill_from_dict(row)
             machs.append(mach)
-
         machs.sort(key=lambda x: x.name)
         return machs
 
     @classmethod
     def get_by_name(cls, name: str) -> Optional[Machine]:
-        for mach in cls.get_all():
-            if mach.name == name:
-                return mach
+        """Indexed point-lookup by machine name from SQLite."""
+        row = MachineRepository.get_by_name(name)
+        if row:
+            mach = cls()
+            mach.fill_from_dict(row)
+            return mach
         return None
 
     @classmethod
     def find_by_mac(cls, mac: str) -> Optional[Machine]:
-        mac_lower = mac.lower()
-        for mach in cls.get_all():
-            if mach.mac.lower() == mac_lower:
-                return mach
+        """Indexed point-lookup by MAC address from SQLite."""
+        row = MachineRepository.get_by_mac(mac)
+        if row:
+            mach = cls()
+            mach.fill_from_dict(row)
+            return mach
         return None
+
+    def fill_from_dict(self, data: Dict[str, Any]) -> None:
+        """Populate Machine attributes from a dictionary or SQLite row."""
+        def get_val(key: str, default: str = "") -> str:
+            val = data.get(key)
+            if val is None and key == "_is_started":
+                val = data.get("is_started")
+            if val is not None:
+                return str(val)
+            return default
+
+        self.name = get_val("name")
+        self.mac = get_val("mac").lower()
+        self.ip = get_val("ip")
+        self._is_started = get_val("_is_started", "0")
+        self.arch = get_val("arch")
+        self.os = get_val("os")
+        self.kernel = get_val("kernel")
+        self.reservation = get_val("reservation")
+        self.resources = get_val("resources")
+        self.boot_params = get_val("boot_params")
+        self.vm_params = get_val("vm_params")
+        self.only_vm = get_val("only_vm", "0")
+        self.job = get_val("job")
+        self.job_pid = get_val("job_pid")
+        self.startcmd = get_val("startcmd")
+        self.stopcmd = get_val("stopcmd")
+        self.powercmd = get_val("powercmd")
+
+        start_tout = get_val("start_timeout")
+        try:
+            self.start_timeout = int(start_tout) if start_tout and str(start_tout).strip() else self.start_timeout_default
+        except (ValueError, TypeError):
+            self.start_timeout = self.start_timeout_default
+
+    def fill_from_xmlobj(self, obj: Any) -> None:
+        """Backwards compatibility wrapper for XML elements or dictionaries."""
+        if isinstance(obj, dict):
+            self.fill_from_dict(obj)
+            return
+
+        def get_val(key: str, default: str = "") -> str:
+            if hasattr(obj, "find") and callable(getattr(obj, "find")):
+                child = obj.find(key)
+                if child is not None and child.text is not None:
+                    return child.text
+                return default
+            elif hasattr(obj, key):
+                val = getattr(obj, key)
+                if val is not None and not callable(val):
+                    return str(val)
+                return default
+            return default
+
+        d = {
+            "name": get_val("name"),
+            "mac": get_val("mac"),
+            "ip": get_val("ip"),
+            "_is_started": get_val("_is_started") or get_val("is_started"),
+            "arch": get_val("arch"),
+            "os": get_val("os"),
+            "kernel": get_val("kernel"),
+            "reservation": get_val("reservation"),
+            "resources": get_val("resources"),
+            "boot_params": get_val("boot_params"),
+            "vm_params": get_val("vm_params"),
+            "only_vm": get_val("only_vm"),
+            "job": get_val("job"),
+            "job_pid": get_val("job_pid"),
+            "startcmd": get_val("startcmd"),
+            "stopcmd": get_val("stopcmd"),
+            "powercmd": get_val("powercmd"),
+            "start_timeout": get_val("start_timeout"),
+        }
+        self.fill_from_dict(d)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert machine attributes into dictionary representation for DB upserts."""
+        return {
+            "name": self.name,
+            "mac": self.mac,
+            "ip": self.ip,
+            "arch": self.arch,
+            "os": self.os,
+            "kernel": self.kernel,
+            "reservation": self.reservation,
+            "resources": self.resources,
+            "boot_params": self.boot_params,
+            "vm_params": self.vm_params,
+            "only_vm": self.only_vm,
+            "job": self.job,
+            "job_pid": self.job_pid,
+            "startcmd": self.startcmd,
+            "stopcmd": self.stopcmd,
+            "powercmd": self.powercmd,
+            "start_timeout": self.start_timeout,
+            "_is_started": self._is_started,
+        }
+
+    def save(self) -> None:
+        """Upsert complete machine configuration to SQLite."""
+        MachineRepository.upsert_machine(self.to_dict())
+
+    def load(self) -> None:
+        """Reload machine properties from SQLite database."""
+        row = None
+        if self.name:
+            row = MachineRepository.get_by_name(self.name)
+        if not row and self.mac:
+            row = MachineRepository.get_by_mac(self.mac)
+
+        if row:
+            self.fill_from_dict(row)
+            return
+        fatal("Failed to load machine")
+
+    def clear(self) -> None:
+        """Atomically clear IP and started status in DB."""
+        self.ip = ""
+        self._is_started = "0"
+        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0"})
+        self.debug("cleared machine state")
+
+    def clear_job(self) -> None:
+        """Atomically clear job details in DB."""
+        self.job = ""
+        self.job_pid = ""
+        MachineRepository.update_fields(self.name, {"job": "", "job_pid": ""})
+        self.debug("cleared job")
 
     def get_ip_from_mac(self) -> Optional[str]:
         if not self.is_started():
@@ -216,29 +340,20 @@ class Machine:
     def get_ip(self) -> Optional[str]:
         ip = self.get_ip_from_mac()
 
-        LOCK()
         if not ip:
             self.load()
-            if self.ip:
-                ip = self.ip
-            else:
-                ip = None
+            ip = self.ip if self.ip else None
         else:
             if self.ip != ip:
                 self.debug(f"Changing IP {self.ip} -> {ip}")
-                self.ip = ip
-                self.save()
-        UNLOCK()
+                self.set_ip(ip)
 
         return ip
 
     def set_ip(self, ip: str) -> None:
-        if Util.is_valid_ip(ip):
-            LOCK()
-            self.load()
+        if Util.is_valid_ip(ip) or ip == "":
             self.ip = ip
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"ip": ip})
 
     def get_power(self) -> str:
         """Execute powercmd to query current power usage in Watts."""
@@ -294,80 +409,6 @@ class Machine:
 
         self.set_ip("")
         return "offline"
-
-    def fill_from_xmlobj(self, obj: Any) -> None:
-        def get_val(key: str, default: str = "") -> str:
-            if hasattr(obj, "find") and callable(getattr(obj, "find")):
-                child = obj.find(key)
-                if child is not None and child.text is not None:
-                    return child.text
-                return default
-            elif hasattr(obj, key):
-                val = getattr(obj, key)
-                if val is not None and not callable(val):
-                    return str(val)
-                return default
-            elif isinstance(obj, dict) and key in obj:
-                val = obj[key]
-                if val is not None and not callable(val):
-                    return str(val)
-                return default
-            return default
-
-        self.name = get_val("name")
-        self.mac = get_val("mac").lower()
-        self.ip = get_val("ip")
-
-        is_started_raw = get_val("_is_started") or get_val("is_started")
-        self._is_started = is_started_raw if is_started_raw else "0"
-
-        self.arch = get_val("arch")
-        self.os = get_val("os")
-        self.kernel = get_val("kernel")
-        self.reservation = get_val("reservation")
-        self.resources = get_val("resources")
-        self.boot_params = get_val("boot_params")
-        self.vm_params = get_val("vm_params")
-        self.only_vm = get_val("only_vm")
-        self.job = get_val("job")
-        self.job_pid = get_val("job_pid")
-        self.startcmd = get_val("startcmd")
-        self.stopcmd = get_val("stopcmd")
-        self.powercmd = get_val("powercmd")
-
-        start_tout = get_val("start_timeout")
-        try:
-            self.start_timeout = int(start_tout) if start_tout and str(start_tout).strip() else self.start_timeout_default
-        except (ValueError, TypeError):
-            self.start_timeout = self.start_timeout_default
-
-    def save(self) -> None:
-        MachineRepository.update_machine(self)
-
-    def load(self) -> None:
-        for mach in Machine.get_all():
-            if self.mac == mach.mac:
-                self.fill_from_xmlobj(mach)
-                return
-        fatal("Failed to load machine")
-
-    def clear(self) -> None:
-        LOCK()
-        self.load()
-        self.ip = ""
-        self._is_started = ""
-        self.save()
-        UNLOCK()
-        self.debug("cleared machine state")
-
-    def clear_job(self) -> None:
-        LOCK()
-        self.load()
-        self.job = ""
-        self.job_pid = ""
-        self.save()
-        UNLOCK()
-        self.debug("cleared job")
 
     def is_job_stale(self) -> bool:
         if not self.job:
@@ -468,22 +509,16 @@ class Machine:
             os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
             os_str = f"{arch}/{os_name}"
             if Os.is_runnable(arch, os_name, self):
-                LOCK()
-                self.load()
                 self.out(f"Setting OS {os_str}")
                 self.os = os_str
                 self.kernel = ""
-                self.save()
-                UNLOCK()
+                MachineRepository.update_fields(self.name, {"os": os_str, "kernel": ""})
                 self.set("kernel", "latest")
             elif os_name == "NONE":
-                LOCK()
-                self.load()
                 self.out("Skipping ipxe. Machine will use next configured boot option.")
                 self.os = "NONE/NONE"
                 self.kernel = ""
-                self.save()
-                UNLOCK()
+                MachineRepository.update_fields(self.name, {"os": "NONE/NONE", "kernel": ""})
             else:
                 fatal(f"Invalid OS: {os_str}")
         elif attr == "kernel":
@@ -505,11 +540,8 @@ class Machine:
                 if initrd.exists():
                     subprocess.run(f"sudo chmod 644 {initrd}", shell=True)
 
-                LOCK()
-                self.load()
                 self.kernel = val_str
-                self.save()
-                UNLOCK()
+                MachineRepository.update_fields(self.name, {"kernel": val_str})
                 self.out(f"Setting kernel to {self.kernel}")
             else:
                 self.error(f"Kernel {val_str} doesn't exist. Aborting.")
@@ -517,65 +549,45 @@ class Machine:
             out(f"Current resources: {self.resources}")
             if not val:
                 val = prompt_text("Enter new resources (space separated):")
-            LOCK()
-            self.load()
             self.resources = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"resources": str(val)})
         elif attr == "params":
             out(f"Current boot parameters: {self.boot_params}")
             if not val:
                 val = prompt_text("Enter new boot parameters:")
-            LOCK()
-            self.load()
             self.boot_params = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"boot_params": str(val)})
         elif attr == "vmparams":
             out(f"Current VM parameters: {self.vm_params}")
             if not val:
                 val = prompt_text("Enter new VM parameters:")
-            LOCK()
-            self.load()
             self.vm_params = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"vm_params": str(val)})
         elif attr == "startcmd":
             out(f"Current start command: {self.startcmd}")
             if not val:
                 val = prompt_text("Enter new start command:")
-            LOCK()
-            self.load()
             self.startcmd = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"startcmd": str(val)})
         elif attr == "stopcmd":
             out(f"Current stop command: {self.stopcmd}")
             if not val:
                 val = prompt_text("Enter new stop command:")
-            LOCK()
-            self.load()
             self.stopcmd = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"stopcmd": str(val)})
         elif attr == "powercmd":
             out(f"Current power command: {self.powercmd}")
             if not val:
                 val = prompt_text("Enter new power command:")
-            LOCK()
-            self.load()
             self.powercmd = str(val)
-            self.save()
-            UNLOCK()
+            MachineRepository.update_fields(self.name, {"powercmd": str(val)})
         elif attr == "start-timeout":
             out(f"Current start-timeout: {self.start_timeout}")
             if not val:
                 val = prompt_text("Enter new start-timeout (leave empty for default):")
-            LOCK()
-            self.load()
-            self.start_timeout = int(val) if val else self.start_timeout_default
-            self.save()
-            UNLOCK()
+            tout = int(val) if val else self.start_timeout_default
+            self.start_timeout = tout
+            MachineRepository.update_fields(self.name, {"start_timeout": tout})
 
     def get(self, attr: str) -> Any:
         mapping = {
@@ -678,7 +690,7 @@ class Machine:
 
             wait_str = ", ".join(res_wait)
             with console.status(f"[bold yellow]({self.name}) Waiting for locked resources: {wait_str}...[/bold yellow]"):
-                SLEEP_ON_LOCK(10)
+                time.sleep(10)
 
             if time.time() - start_time >= timeout:
                 self.error("Timed out waiting for resources")
@@ -718,15 +730,11 @@ class Machine:
         if self.is_only_vm():
             return self.start_vm()
 
-        LOCK()
         if not self.wait_for_resources():
-            UNLOCK()
             return False
 
-        self.load()
         self._is_started = "1"
-        self.save()
-        UNLOCK()
+        MachineRepository.update_fields(self.name, {"_is_started": "1"})
 
         if status == "offline":
             if self.startcmd:
@@ -769,21 +777,15 @@ class Machine:
         if not Util.is_root():
             self.out("You must be root to start a VM")
 
-        LOCK()
-
         cmd_check = f"ps aux | grep qemu | grep {self.mac}"
         res = subprocess.run(cmd_check, shell=True, capture_output=True, text=True)
         lines = [line for line in res.stdout.strip().splitlines() if line]
         if len(lines) > 1:
             self.error("Failed to start VM. Already running.")
-            UNLOCK()
             return False
 
-        LOCK()
-        self.load()
         self._is_started = "1"
-        self.save()
-        UNLOCK()
+        MachineRepository.update_fields(self.name, {"_is_started": "1"})
 
         self.out(f"Starting virtual machine with OS {self.os} and kernel {self.kernel}")
 
@@ -841,7 +843,6 @@ class Machine:
         subprocess.run(cmd, shell=True)
 
         time.sleep(3)
-        UNLOCK()
 
         ret = self.wait_for_status("online", self.start_timeout)
         if not ret:
@@ -851,12 +852,8 @@ class Machine:
         return ret
 
     def stop(self, force: bool = False) -> bool:
-        LOCK()
-        self.load()
         if not self.is_started() and self.get_status() == "offline" and not force:
-            UNLOCK()
             return True
-        UNLOCK()
 
         self.out("Stopping machine")
 
@@ -925,7 +922,6 @@ class Machine:
         return True
 
     def wait(self) -> None:
-        LOCK()
         self.load()
         if not self.is_idle():
             started_str = "yes" if self.is_started() else "no"
@@ -936,9 +932,8 @@ class Machine:
         console = Console()
         while not self.is_idle():
             with console.status(f"[bold yellow]({self.name}) Waiting for machine to become idle...[/bold yellow]"):
-                SLEEP_ON_LOCK(10)
+                time.sleep(10)
                 self.load()
-        UNLOCK()
 
     def ssh_cmd(self, cmd: str) -> Union[int, bool]:
         no_timeout = getattr(Options, "options", {}).get("no-ssh-timeout", False)
@@ -965,11 +960,8 @@ class Machine:
             return False
 
     def reserve(self, user: str) -> None:
-        LOCK()
-        self.load()
         self.reservation = user
-        self.save()
-        UNLOCK()
+        MachineRepository.update_fields(self.name, {"reservation": user})
 
     def get_kernels(self) -> Dict[str, str]:
         path = self.get_kernel_path()

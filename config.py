@@ -2,7 +2,7 @@ import pathlib
 
 # Core Paths
 MAMA_PATH: str = "/usr/share/mama"
-SETTINGS_FILE: str = f"{MAMA_PATH}/mama.xml"
+DB_FILE: str = f"{MAMA_PATH}/mama.db"
 
 # Network Configuration
 MAMA_HOST: str = "192.168.2.1"

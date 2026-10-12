@@ -15,7 +15,7 @@ if not getattr(config, "MAMA_HOST", None):
     except (socket.gaierror, OSError):
         config.MAMA_HOST = "127.0.0.1"
 
-config.SETTINGS_FILE = str(mama_path / "mama.xml")
+config.DB_FILE = str(mama_path / "mama.db")
 
 # Load configuration override if present
 etc_config = pathlib.Path("/etc/mama.py")

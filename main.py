@@ -172,7 +172,7 @@ def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
 
     mach = Machine()
     if m_found:
-        mach.fill_from_xmlobj(m_found)
+        mach.fill_from_dict(m_found.to_dict())
         Log.set_file(mach.name)
 
     return mach
@@ -1260,8 +1260,9 @@ def main() -> None:
         "no-overwrite": parsed_args.no_overwrite,
     }
 
+    db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
     if MachineRepository.load() is False:
-        fatal(f"Failed to open settings file: {config.SETTINGS_FILE}\n")
+        fatal(f"Failed to initialize database: {db_path}\n")
 
     cmd = parsed_args.command
 
