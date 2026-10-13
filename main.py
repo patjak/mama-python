@@ -79,6 +79,7 @@ list-os [machine]                               - list available OSes
 list-kernel [machine]                           - list available kernels
 list-resources                                  - list all resources and what is using them
 log [machine]                                   - print log file
+history [machine]                               - list recorded boot durations and timestamps
 job <job> prepare <arch> <os> [worker]          - Execute prepare part of job for arch and os
   [--args=] - Additional arguments to pass along
   [--no-ssh-timeout] - Allows ssh commands to run indefinitely
@@ -533,6 +534,47 @@ def cmd_list_resources() -> None:
             else:
                 styled_machs.append(f"[dim]{m}[/dim]")
         table.add_row(res, ", ".join(styled_machs))
+
+    console.print(table)
+
+
+def cmd_history(arg: Union[str, bool, None] = False) -> None:
+    target_mach: Optional[str] = None
+    if arg:
+        mach = select_machine(arg)
+        if not isinstance(mach, Machine):
+            return
+        target_mach = mach.name
+
+    records = MachineRepository.get_boot_history(target_mach)
+    if not records:
+        out(f"No boot history recorded{' for ' + target_mach if target_mach else ''}.")
+        return
+
+    console = Console()
+    table = Table(
+        title=f"Boot History{': ' + target_mach if target_mach else ' (All Machines)'}",
+        header_style="bold cyan",
+        border_style="bright_blue",
+        title_style="bold white",
+    )
+    table.add_column("No.", justify="right", style="dim")
+    table.add_column("Machine", style="bold white")
+    table.add_column("OS", style="bold yellow")
+    table.add_column("Mode", justify="center")
+    table.add_column("Duration", justify="right", style="green")
+    table.add_column("Recorded At", style="cyan")
+
+    for idx, row in enumerate(records, start=1):
+        mode_str = "[cyan]VM[/cyan]" if row["boot_type"] == "vm" else "[magenta]Bare Metal[/magenta]"
+        table.add_row(
+            str(idx),
+            row["machine_name"],
+            row["os"] or "-",
+            mode_str,
+            f"{row['duration']}s",
+            row.get("created_at") or "-",
+        )
 
     console.print(table)
 
@@ -1098,6 +1140,10 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_clear_log_mach = p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_clear_log_mach.completer = machine_completer
 
+    p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show boot timing history and logs", formatter_class=HELP_FORMATTER)
+    p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
+    p_hist_mach.completer = machine_completer
+
     # Job subcommands
     job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows", formatter_class=HELP_FORMATTER)
     job_p.add_argument("job_name", help="Job name")
@@ -1274,6 +1320,8 @@ def main() -> None:
         cmd_list_kernel(parsed_args.machine)
     elif cmd == "list-resources":
         cmd_list_resources()
+    elif cmd == "history":
+        cmd_history(parsed_args.machine)
     elif cmd == "job":
         if parsed_args.job_action == "prepare":
             cmd_job_prepare(parsed_args.job_name, parsed_args.arch, parsed_args.os, parsed_args.worker)

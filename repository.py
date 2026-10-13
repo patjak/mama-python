@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pathlib
 import sqlite3
 import time
@@ -26,7 +27,7 @@ class MachineRepository:
 
     @classmethod
     def init_db(cls) -> None:
-        """Initialize tables and indexes."""
+        """Initialize tables, migrate columns if necessary, and ensure indexes exist."""
         with cls._get_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS machines (
@@ -51,16 +52,30 @@ class MachineRepository:
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_machines_mac ON machines(mac);")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS boot_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     machine_name TEXT NOT NULL,
+                    os TEXT NOT NULL DEFAULT '',
                     boot_type TEXT NOT NULL,
                     duration INTEGER NOT NULL,
-                    timestamp INTEGER NOT NULL
+                    timestamp INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT ''
                 );
             """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_boot_history_mach ON boot_history(machine_name, boot_type);")
+
+            # Defensive schema migration in case boot_history previously existed without os or created_at
+            columns_info = conn.execute("PRAGMA table_info(boot_history);").fetchall()
+            col_names = [col["name"] for col in columns_info]
+            if "os" not in col_names:
+                conn.execute("ALTER TABLE boot_history ADD COLUMN os TEXT NOT NULL DEFAULT '';")
+            if "created_at" not in col_names:
+                conn.execute("ALTER TABLE boot_history ADD COLUMN created_at TEXT NOT NULL DEFAULT '';")
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_boot_history_lookup ON boot_history(machine_name, os, boot_type);"
+            )
             conn.commit()
 
     @classmethod
@@ -169,38 +184,49 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
-    def record_boot_time(cls, machine_name: str, boot_type: str, duration: int) -> None:
-        """Record a successful boot duration and keep the 10 most recent samples."""
+    def record_boot_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
+        """Record a successful boot duration and prune records older than the latest 10 samples for this target."""
+        clean_os = os_name.strip() if os_name else "default"
+        now_epoch = int(time.time())
+        created_at_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         with cls._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute(
-                "INSERT INTO boot_history (machine_name, boot_type, duration, timestamp) VALUES (?, ?, ?, ?);",
-                (machine_name, boot_type, int(duration), int(time.time())),
+                """
+                INSERT INTO boot_history (machine_name, os, boot_type, duration, timestamp, created_at)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
             )
+            # Prune to maintain only the 10 most recent entries per (machine_name, os, boot_type) tuple
             conn.execute(
                 """
                 DELETE FROM boot_history
-                WHERE machine_name = ? AND boot_type = ? AND id NOT IN (
+                WHERE machine_name = ? AND os = ? AND boot_type = ? AND id NOT IN (
                     SELECT id FROM boot_history
-                    WHERE machine_name = ? AND boot_type = ?
+                    WHERE machine_name = ? AND os = ? AND boot_type = ?
                     ORDER BY timestamp DESC LIMIT 10
                 );
-            """,
-                (machine_name, boot_type, machine_name, boot_type),
+                """,
+                (machine_name, clean_os, boot_type, machine_name, clean_os, boot_type),
             )
             conn.commit()
 
     @classmethod
-    def get_calculated_timeout(cls, machine_name: str, boot_type: str, default_timeout: int = 240) -> int:
+    def get_calculated_timeout(
+        cls, machine_name: str, os_name: str, boot_type: str, default_timeout: int = 240
+    ) -> int:
         """Calculate adaptive boot timeout based on rolling average + 25% margin + 30s buffer."""
+        clean_os = os_name.strip() if os_name else "default"
         with cls._get_connection() as conn:
             row = conn.execute(
                 """
                 SELECT AVG(duration) as avg_duration, COUNT(*) as sample_count
                 FROM boot_history
-                WHERE machine_name = ? AND boot_type = ?;
-            """,
-                (machine_name, boot_type),
+                WHERE machine_name = ? AND os = ? AND boot_type = ?;
+                """,
+                (machine_name, clean_os, boot_type),
             ).fetchone()
 
             if row and row["sample_count"] is not None and row["sample_count"] >= 3:
@@ -209,6 +235,28 @@ class MachineRepository:
                 return max(45, calculated)
 
         return default_timeout
+
+    @classmethod
+    def get_boot_history(cls, machine_name: Optional[str] = None) -> List[dict]:
+        """Query boot history rows ordered chronologically descending."""
+        with cls._get_connection() as conn:
+            if machine_name:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM boot_history
+                    WHERE machine_name = ?
+                    ORDER BY timestamp DESC;
+                    """,
+                    (machine_name,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM boot_history
+                    ORDER BY timestamp DESC;
+                    """
+                ).fetchall()
+            return [dict(r) for r in rows]
 
 
 # Module-level locking functions expected by job.py, machine.py, etc.

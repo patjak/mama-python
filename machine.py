@@ -749,19 +749,21 @@ class Machine:
                 subprocess.run(startcmd, shell=True)
 
         effective_timeout = MachineRepository.get_calculated_timeout(
-            self.name, "bm", default_timeout=self.start_timeout
+            self.name, self.os, "bm", default_timeout=self.start_timeout
         )
-        self.debug(f"Using bare-metal boot timeout: {effective_timeout}s")
+        self.debug(f"Using bare-metal boot timeout: {effective_timeout}s for OS {self.os}")
 
         t_start = time.time()
         ret = self.wait_for_status("online", effective_timeout)
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_boot_time(self.name, "bm", elapsed)
-            new_timeout = MachineRepository.get_calculated_timeout(self.name, "bm")
+            MachineRepository.record_boot_time(self.name, self.os, "bm", elapsed)
+            new_timeout = MachineRepository.get_calculated_timeout(self.name, self.os, "bm")
             self.set("start-timeout", new_timeout)
-            self.debug(f"Bare-metal boot finished in {elapsed}s. Auto-updated start timeout to {new_timeout}s.")
+            self.debug(
+                f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
+            )
         else:
             self.stop()
 
@@ -863,19 +865,21 @@ class Machine:
         time.sleep(3)
 
         effective_timeout = MachineRepository.get_calculated_timeout(
-            self.name, "vm", default_timeout=self.start_timeout
+            self.name, self.os, "vm", default_timeout=self.start_timeout
         )
-        self.debug(f"Using VM boot timeout: {effective_timeout}s")
+        self.debug(f"Using VM boot timeout: {effective_timeout}s for OS {self.os}")
 
         t_start = time.time()
         ret = self.wait_for_status("online", effective_timeout)
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_boot_time(self.name, "vm", elapsed)
-            new_timeout = MachineRepository.get_calculated_timeout(self.name, "vm")
+            MachineRepository.record_boot_time(self.name, self.os, "vm", elapsed)
+            new_timeout = MachineRepository.get_calculated_timeout(self.name, self.os, "vm")
             self.set("start-timeout", new_timeout)
-            self.debug(f"VM boot finished in {elapsed}s. Auto-updated start timeout to {new_timeout}s.")
+            self.debug(
+                f"VM boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
+            )
         else:
             self.kill_vm()
             self.clear()
