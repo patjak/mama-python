@@ -217,7 +217,7 @@ class MachineRepository:
     def get_calculated_timeout(
         cls, machine_name: str, os_name: str, boot_type: str, default_timeout: int = 240
     ) -> int:
-        """Calculate adaptive boot timeout based on rolling average + 25% margin + 30s buffer."""
+        """Calculate adaptive boot timeout based on rolling average multiplied by 1.25x."""
         clean_os = os_name.strip() if os_name else "default"
         with cls._get_connection() as conn:
             row = conn.execute(
@@ -231,7 +231,7 @@ class MachineRepository:
 
             if row and row["sample_count"] is not None and row["sample_count"] >= 3:
                 avg_duration = float(row["avg_duration"])
-                calculated = int(avg_duration * 1.25) + 30
+                calculated = int(avg_duration * 1.25)
                 return max(45, calculated)
 
         return default_timeout
