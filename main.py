@@ -339,7 +339,7 @@ def cmd_list() -> None:
     table.add_column("Name", style="bold white")
     table.add_column("IP", style="green")
     table.add_column("MAC", style="magenta")
-    table.add_column("State")
+    table.add_column("Status")
     table.add_column("On", justify="center")
     table.add_column("Pwr", justify="right", style="yellow")
     table.add_column("VM", justify="center")
@@ -1371,7 +1371,7 @@ def main() -> None:
         "no-overwrite": parsed_args.no_overwrite,
     }
 
-    db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
+    db_path = getattr(config, "DB_FILE", f"{getattr(config, "MAMA_PATH", "/usr/share/mama")}/mama.db")
     if MachineRepository.load() is False:
         fatal(f"Failed to initialize database: {db_path}\n")
 

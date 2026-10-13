@@ -375,7 +375,7 @@ def generate_autoexec_ipxe(mama_base: pathlib.Path, server_ip: str, server_port:
         content = (
             "#!ipxe\n"
             "dhcp\n"
-            f"chain http://{http_host}/boot.py?mac=\${{mac}}\n"
+            f"chain http://{http_host}/boot.py?mac=${{mac}}\n"
         )
 
         autoexec_path.write_text(content, encoding="utf-8")
