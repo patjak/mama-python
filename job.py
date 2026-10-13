@@ -13,10 +13,6 @@ import config
 from logger import Log, debug, error, fatal, out
 from options import Options
 from repository import (
-    IS_LOCKED,
-    LOCK,
-    SLEEP_ON_LOCK,
-    UNLOCK,
     Machine,
     select_machine,
 )
@@ -56,16 +52,13 @@ class Job:
         return False
 
     def _wait_for_active_job(self, job_str: str, mach: Any = False) -> None:
-        if not IS_LOCKED():
-            self.fatal("Lock must be held in wait_for_active_job()")
-
         if self._is_active_job(job_str, mach):
             self.out(f"Waiting for running job: {job_str}")
 
         console = Console()
         while self._is_active_job(job_str, mach):
             with console.status(f"[bold yellow]Waiting for running job to finish: {job_str}...[/bold yellow]"):
-                SLEEP_ON_LOCK(10)
+                time.sleep(10)
 
     def _preprocess(
         self,
@@ -116,8 +109,6 @@ class Job:
         except Exception as e:
             self.fatal(f"Prepare job not found or unreadable: {e}")
 
-        LOCK()
-
         job_str = f"prepare {self.name} {arch}/{os_name}"
 
         # Wait for all machines running this job to finish
@@ -131,9 +122,7 @@ class Job:
         console = Console()
         while not worker_mach.is_idle():
             with console.status(f"[bold yellow]Waiting for worker machine '{worker_mach.name}' job to finish: {worker_mach.job}...[/bold yellow]"):
-                UNLOCK()
                 time.sleep(10)
-                LOCK()
                 worker_mach.load()
                 # Check for stale jobs while waiting
                 worker_mach.detect_and_clear_stale_job()
@@ -144,21 +133,15 @@ class Job:
         worker_mach.job_pid = str(os.getpid())
         worker_mach.save()
 
-        UNLOCK()
-
         job_content = self._preprocess(job_content, arch, os_name, worker, False)
 
         ret = self.execute(job_content, mach=False, worker=worker_mach)
         worker_mach.stop()
 
-        LOCK()
-
         worker_mach.load()
         worker_mach.job = prev_job
         worker_mach.job_pid = prev_job_pid
         worker_mach.save()
-
-        UNLOCK()
 
         if not ret:
             self.fatal("Prepare job FAILED")
@@ -179,12 +162,10 @@ class Job:
         except Exception:
             return False
 
-        LOCK()
         mach = select_machine(mach_target)
 
         if not mach:
             self.error("Failed to find machine")
-            UNLOCK()
             return False
 
         if not mach.is_idle():
@@ -193,7 +174,7 @@ class Job:
         console = Console()
         while not mach.is_idle():
             with console.status(f"[bold yellow]Waiting for target machine '{mach.name}' job to finish: {mach.job}...[/bold yellow]"):
-                SLEEP_ON_LOCK(10)
+                time.sleep(10)
                 mach.load()
                 mach.detect_and_clear_stale_job()
 
@@ -202,7 +183,6 @@ class Job:
         mach.job = f"run {self.name} {arch}/{os_name}"
         mach.job_pid = str(os.getpid())
         mach.save()
-        UNLOCK()
 
         job_content = self._preprocess(job_content, arch, os_name, False, mach)
 
@@ -210,12 +190,10 @@ class Job:
 
         mach.stop()
 
-        LOCK()
         mach.load()
         mach.job = prev_job
         mach.job_pid = prev_job_pid
         mach.save()
-        UNLOCK()
 
         return ret
 

@@ -693,88 +693,89 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
     need_sudo = "" if Util.is_root() else "sudo"
     tmp_dir = pathlib.Path(f"/dev/shm/mama-kiwi-{arch}-{os_name}")
 
-    subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-
-    console = Console()
-    with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
-        cmd = f"{need_sudo} kiwi-ng --debug system prepare --description {desc} --root {tmp_dir}{packages_str}"
-        out(cmd)
-        res = subprocess.run(cmd, shell=True)
-
-    if res.returncode != 0:
-        error("Failed to build os with kiwi")
+    with Os.lock(arch, os_name, shared=False):
         subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
 
-    with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
-        res = subprocess.run(f"{need_sudo} mount -t proc /proc {tmp_dir / 'proc'}", shell=True)
+        console = Console()
+        with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
+            cmd = f"{need_sudo} kiwi-ng --debug system prepare --description {desc} --root {tmp_dir}{packages_str}"
+            out(cmd)
+            res = subprocess.run(cmd, shell=True)
+
         if res.returncode != 0:
-            error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
+            error("Failed to build os with kiwi")
             subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
             return
 
-        res = subprocess.run(f"{need_sudo} mount -t sysfs sysfs {tmp_dir / 'sys'}", shell=True)
-        if res.returncode != 0:
-            error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
+        with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
+            res = subprocess.run(f"{need_sudo} mount -t proc /proc {tmp_dir / 'proc'}", shell=True)
+            if res.returncode != 0:
+                error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
+                subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+                return
+
+            res = subprocess.run(f"{need_sudo} mount -t sysfs sysfs {tmp_dir / 'sys'}", shell=True)
+            if res.returncode != 0:
+                error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
+                subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
+                subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+                return
+
+        # Find kernel version for dracut
+        res_k = subprocess.run(f"ls {tmp_dir / 'boot' / 'config-*'}", shell=True, capture_output=True, text=True)
+        if res_k.returncode != 0:
+            error("Failed to find /boot/config-*")
+            subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
             subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
             subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
             return
 
-    # Find kernel version for dracut
-    res_k = subprocess.run(f"ls {tmp_dir / 'boot' / 'config-*'}", shell=True, capture_output=True, text=True)
-    if res_k.returncode != 0:
-        error("Failed to find /boot/config-*")
-        subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
-        subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
+        kver = res_k.stdout.strip().split("config-")[1].splitlines()[0]
 
-    kver = res_k.stdout.strip().split("config-")[1].splitlines()[0]
+        with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
+            res = subprocess.run(f"{need_sudo} chroot {tmp_dir} dracut -f --kver {kver}", shell=True)
 
-    with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
-        res = subprocess.run(f"{need_sudo} chroot {tmp_dir} dracut -f --kver {kver}", shell=True)
+        if res.returncode != 0:
+            error("Failed to run dracut -f inside chroot")
+            subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
+            subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
+            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            return
 
-    if res.returncode != 0:
-        error("Failed to run dracut -f inside chroot")
-        subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
-        subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
+        res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
+        if res.returncode != 0:
+            fatal(f"Failed to umount {tmp_dir / 'sys'}")
 
-    res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
-    if res.returncode != 0:
-        fatal(f"Failed to umount {tmp_dir / 'sys'}")
+        res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
+        if res.returncode != 0:
+            fatal(f"Failed to umount {tmp_dir / 'proc'}")
 
-    res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-    if res.returncode != 0:
-        fatal(f"Failed to umount {tmp_dir / 'proc'}")
+        res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
+        if res.returncode != 0:
+            fatal(f"Failed to remove old version of os: {target}")
 
-    res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
-    if res.returncode != 0:
-        fatal(f"Failed to remove old version of os: {target}")
+        res = subprocess.run(f"{need_sudo} mkdir -p {pathlib.Path(config.MAMA_PATH) / 'os' / arch}", shell=True)
+        if res.returncode != 0:
+            fatal("Failed to create target directory")
 
-    res = subprocess.run(f"{need_sudo} mkdir -p {pathlib.Path(config.MAMA_PATH) / 'os' / arch}", shell=True)
-    if res.returncode != 0:
-        fatal("Failed to create target directory")
+        out("Moving OS into place")
+        res = subprocess.run(f"{need_sudo} mv {tmp_dir} {target}", shell=True)
+        if res.returncode != 0:
+            error("Failed to store new os build")
+            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            return
 
-    out("Moving OS into place")
-    res = subprocess.run(f"{need_sudo} mv {tmp_dir} {target}", shell=True)
-    if res.returncode != 0:
-        error("Failed to store new os build")
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
-        return
+        res = subprocess.run(f"{need_sudo} chmod 644 {target / 'boot' / 'initrd-*'}", shell=True)
+        if res.returncode != 0:
+            fatal("Failed to change permission on initrd")
 
-    res = subprocess.run(f"{need_sudo} chmod 644 {target / 'boot' / 'initrd-*'}", shell=True)
-    if res.returncode != 0:
-        fatal("Failed to change permission on initrd")
-
-    auth_keys = pathlib.Path(config.MAMA_PATH) / "authorized_keys"
-    res = subprocess.run(
-        f"{need_sudo} mkdir -p {target / 'root' / '.ssh'} && {need_sudo} cp {auth_keys} {target / 'root' / '.ssh/'}",
-        shell=True,
-    )
-    if res.returncode != 0:
-        fatal("Failed to copy authorized_keys")
+        auth_keys = pathlib.Path(config.MAMA_PATH) / "authorized_keys"
+        res = subprocess.run(
+            f"{need_sudo} mkdir -p {target / 'root' / '.ssh'} && {need_sudo} cp {auth_keys} {target / 'root' / '.ssh/'}",
+            shell=True,
+        )
+        if res.returncode != 0:
+            fatal("Failed to copy authorized_keys")
 
     out("OS build completed")
 
@@ -800,20 +801,21 @@ def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = 
     dst = pathlib.Path(config.MAMA_PATH) / "machines" / machine / arch / name
     need_sudo = "" if Util.is_root() else "sudo"
 
-    res = subprocess.run(f"{need_sudo} rm -Rf {dst}", shell=True)
-    if res.returncode != 0:
-        fatal("Failed to remove previous installation of the OS")
+    with Os.lock(arch, os_name, shared=True), mach.lock():
+        res = subprocess.run(f"{need_sudo} rm -Rf {dst}", shell=True)
+        if res.returncode != 0:
+            fatal("Failed to remove previous installation of the OS")
 
-    res = subprocess.run(f"{need_sudo} mkdir -p {dst.parent}", shell=True)
-    if res.returncode != 0:
-        fatal(f"Failed to create directory {dst}")
+        res = subprocess.run(f"{need_sudo} mkdir -p {dst.parent}", shell=True)
+        if res.returncode != 0:
+            fatal(f"Failed to create directory {dst}")
 
-    console = Console()
-    with console.status(f"[bold cyan]Installing OS template {arch}/{os_name} to machine {machine}...[/bold cyan]"):
-        res = subprocess.run(f"{need_sudo} cp -r --reflink=auto {src} {dst}", shell=True)
+        console = Console()
+        with console.status(f"[bold cyan]Installing OS template {arch}/{os_name} to machine {machine}...[/bold cyan]"):
+            res = subprocess.run(f"{need_sudo} cp -r --reflink=auto {src} {dst}", shell=True)
 
-    if res.returncode != 0:
-        fatal("Failed to copy new OS to destination")
+        if res.returncode != 0:
+            fatal("Failed to copy new OS to destination")
 
     out("OS install succeeded!")
 
@@ -833,9 +835,10 @@ def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
         fatal("OS isn't installed and cannot be deleted")
 
     target = pathlib.Path(config.MAMA_PATH) / "machines" / machine / arch / os_name
-    res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
-    if res.returncode != 0:
-        fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
+    with mach.lock():
+        res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
+        if res.returncode != 0:
+            fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
 
 
 def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name: str) -> None:
@@ -863,22 +866,20 @@ def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name
         debug("Skipping copy-os since os exists and no-overwrite was specified")
         return
 
-    src_mach.lock()
-    dst_mach.lock()
+    # Sort acquisition order to prevent AB-BA deadlocks between concurrent copies
+    first_mach, second_mach = sorted([src_mach, dst_mach], key=lambda m: m.name)
 
-    out(f"Copying os {arch}/{os_name} from {src_mach.name} to {dst_mach.name}")
-    src_dir = pathlib.Path(config.MAMA_PATH) / "machines" / src_mach.name / arch / os_name
-    dst_arch_dir = pathlib.Path(config.MAMA_PATH) / "machines" / dst_mach.name / arch / ""
+    with first_mach.lock(), second_mach.lock():
+        out(f"Copying os {arch}/{os_name} from {src_mach.name} to {dst_mach.name}")
+        src_dir = pathlib.Path(config.MAMA_PATH) / "machines" / src_mach.name / arch / os_name
+        dst_arch_dir = pathlib.Path(config.MAMA_PATH) / "machines" / dst_mach.name / arch / ""
 
-    subprocess.run(f"{need_sudo} rm -Rf {dst_os_dir}", shell=True)
-    subprocess.run(f"{need_sudo} mkdir -p {dst_os_dir}", shell=True)
+        subprocess.run(f"{need_sudo} rm -Rf {dst_os_dir}", shell=True)
+        subprocess.run(f"{need_sudo} mkdir -p {dst_os_dir}", shell=True)
 
-    console = Console()
-    with console.status(f"[bold cyan]Copying OS {arch}/{os_name} from {src_mach.name} to {dst_mach.name}...[/bold cyan]"):
-        subprocess.run(f"{need_sudo} cp -r --reflink=auto {src_dir} {dst_arch_dir}", shell=True)
-
-    dst_mach.unlock()
-    src_mach.unlock()
+        console = Console()
+        with console.status(f"[bold cyan]Copying OS {arch}/{os_name} from {src_mach.name} to {dst_mach.name}...[/bold cyan]"):
+            subprocess.run(f"{need_sudo} cp -r --reflink=auto {src_dir} {dst_arch_dir}", shell=True)
 
 
 def cmd_delete(arg: Union[str, bool]) -> None:

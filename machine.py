@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fcntl
 import os
 import pathlib
 import subprocess
-import threading
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -26,26 +26,6 @@ from repository import MachineRepository
 from util import Util
 
 
-def LOCK() -> None:
-    """Backwards-compatibility lock wrapper."""
-    pass
-
-
-def UNLOCK() -> None:
-    """Backwards-compatibility unlock wrapper."""
-    pass
-
-
-def IS_LOCKED() -> bool:
-    """Backwards-compatibility lock status check."""
-    return False
-
-
-def SLEEP_ON_LOCK(seconds: int) -> None:
-    """Backwards-compatibility sleep wrapper."""
-    time.sleep(seconds)
-
-
 class Machine:
     # Class tunables for machine management
     start_timeout_default: int = 4 * 60
@@ -53,18 +33,6 @@ class Machine:
     ssh_cmd_timeout: int = 1 * 60
     power_cycle_delay: int = 30
     resource_wait_timeout: int = 20 * 60 * 60
-
-    # Thread-safe reentrant lock registry per machine
-    _machine_rlocks: Dict[str, threading.RLock] = {}
-    _rlock_registry_lock = threading.Lock()
-
-    @classmethod
-    def _get_rlock(cls, machine_name: str) -> threading.RLock:
-        """Fetch or create a reentrant lock dedicated to a specific machine name."""
-        with cls._rlock_registry_lock:
-            if machine_name not in cls._machine_rlocks:
-                cls._machine_rlocks[machine_name] = threading.RLock()
-            return cls._machine_rlocks[machine_name]
 
     def __init__(self, name: str = "", mac: str = "") -> None:
         self.name: str = name
@@ -87,9 +55,6 @@ class Machine:
         self.start_timeout: int = self.start_timeout_default
         self.stop_timeout: int = self.stop_timeout_default
 
-        self._lock: int = 0
-        self._lock_stream: Optional[Any] = None
-
     def _preprocess_cmd(self, cmd: str) -> str:
         """Substitute parameters into startcmd, stopcmd, and powercmd."""
         cmd = cmd.replace("$OS_ARCH", self.get_os_arch())
@@ -99,68 +64,47 @@ class Machine:
         cmd = cmd.replace("$MAMA_HOST", getattr(config, "MAMA_HOST", ""))
         return cmd
 
-    def lock(self) -> bool:
-        """Acquire exclusive lock on the machine hardware lock file and RLock."""
+    @contextlib.contextmanager
+    def lock(self):
+        """Exclusive filesystem lock for mutating machine disk contents."""
+        lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
+        try:
+            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            if not lock_file.exists():
+                lock_file.touch(mode=0o666, exist_ok=True)
+        except Exception:
+            pass
+
         if getattr(config, "DEBUG_LOCK", False):
-            msg = f"PID {os.getpid()}: {self.name}: Acquiring machine lock: {self._lock + 1}\n"
+            msg = f"PID {os.getpid()}: {self.name}: Acquiring machine lock\n"
             lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
-            with open(lock_debug, "a") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.write(msg)
-
-        rlock = Machine._get_rlock(self.name)
-        rlock.acquire()
-
-        if self._lock == 0:
-            if self._lock_stream is not None:
-                rlock.release()
-                fatal("Tried to acquire an already acquired lock")
-
-            lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
             try:
-                lock_file.parent.mkdir(parents=True, exist_ok=True)
-                self._lock_stream = open(lock_file, "a+")
-                fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_EX)
-            except Exception as e:
-                rlock.release()
-                fatal(f"Failed to acquire lock on {lock_file}: {e}")
+                with open(lock_debug, "a") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    f.write(msg)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
 
-        self._lock += 1
-        return True
-
-    def unlock(self) -> None:
-        """Release exclusive lock on the machine directory."""
-        if getattr(config, "DEBUG_LOCK", False):
-            msg = f"PID {os.getpid()}: {self.name}: Releasing machine lock: {self._lock}\n"
-            lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
-            with open(lock_debug, "a") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                f.write(msg)
-
-        if self._lock == 0:
-            fatal(f"{self.name} is not locked")
-
-        self._lock -= 1
-
-        if self._lock == 0 and self._lock_stream is not None:
+        with open(lock_file, "a+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                fcntl.flock(self._lock_stream.fileno(), fcntl.LOCK_UN)
-                self._lock_stream.close()
+                yield
             finally:
-                self._lock_stream = None
-
-        rlock = Machine._get_rlock(self.name)
-        rlock.release()
-
-    def is_locked(self) -> bool:
-        return self._lock != 0
-
-    def sleep_on_lock(self, seconds: int) -> None:
-        self.unlock()
-        if self.is_locked():
-            fatal(f"Sleeping while lock is held on {self.name}")
-        time.sleep(seconds)
-        self.lock()
+                if getattr(config, "DEBUG_LOCK", False):
+                    msg = f"PID {os.getpid()}: {self.name}: Releasing machine lock\n"
+                    lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
+                    try:
+                        with open(lock_debug, "a") as f:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                            f.write(msg)
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
 
     @classmethod
     def get_all(cls) -> List[Machine]:
