@@ -79,7 +79,7 @@ list-os [machine]                               - list available OSes
 list-kernel [machine]                           - list available kernels
 list-resources                                  - list all resources and what is using them
 log [machine]                                   - print log file
-history [machine]                               - list recorded boot durations and timestamps
+history [machine]                               - list recorded start/stop durations and timestamps
 job <job> prepare <arch> <os> [worker]          - Execute prepare part of job for arch and os
   [--args=] - Additional arguments to pass along
   [--no-ssh-timeout] - Allows ssh commands to run indefinitely
@@ -111,11 +111,14 @@ set <machine>   os <os>                         - set os for machine
                 params <boot parameters>        - Set additional kernel command line parameters
                 vmparams <VM parameters>        - Add additional QEMU command line parameters
                 startcmd <command>              - Run a command instead of the normal start routine
-                stopcmd <command>              - Run a command after normal halt/poweroff of machine
+                stopcmd <command>               - Run a command after normal halt/poweroff of machine
                 powercmd <command>              - Run a command to fetch current power usage in Watts
+                start-timeout <seconds>         - Set machine start timeout in seconds
+                stop-timeout <seconds>          - Set machine stop timeout in seconds
 get <machine> [os | params | resources | kernel - Get machine attribute
                reservation | ip | mac | vmparams |
-               startcmd | stopcmd | powercmd | power ]
+               startcmd | stopcmd | powercmd | power |
+               start-timeout | stop-timeout ]
 reserve <machine>                               - Reserve the machine for the current user
 release <machine>                               - Release any reservation you have on the machine
 release-forced <machine>                        - Release the machine even if you didn't reserve it
@@ -553,7 +556,7 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
 
     console = Console()
     table = Table(
-        title=f"Boot History{': ' + target_mach if target_mach else ' (All Machines)'}",
+        title=f"Machine Run History{': ' + target_mach if target_mach else ' (All Machines)'}",
         header_style="bold cyan",
         border_style="bright_blue",
         title_style="bold white",
@@ -562,17 +565,27 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
     table.add_column("Machine", style="bold white")
     table.add_column("OS", style="bold yellow")
     table.add_column("Mode", justify="center")
-    table.add_column("Duration", justify="right", style="green")
+    table.add_column("Start Time", justify="right", style="green")
+    table.add_column("Stop Time", justify="right", style="yellow")
     table.add_column("Recorded At", style="cyan")
 
     for idx, row in enumerate(records, start=1):
         mode_str = "[cyan]VM[/cyan]" if row["boot_type"] == "vm" else "[magenta]Bare Metal[/magenta]"
+        start_dur = row.get("start_duration")
+        if start_dur is None:
+            start_dur = row.get("duration")
+        start_str = f"{start_dur}s" if start_dur is not None else "[dim]-[/dim]"
+
+        stop_dur = row.get("stop_duration")
+        stop_str = f"{stop_dur}s" if stop_dur is not None else "[dim]-[/dim]"
+
         table.add_row(
             str(idx),
             row["machine_name"],
             row["os"] or "-",
             mode_str,
-            f"{row['duration']}s",
+            start_str,
+            stop_str,
             row.get("created_at") or "-",
         )
 
@@ -1042,18 +1055,19 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
     if not attr:
         attrs = [
             "os", "kernel", "resources", "params",
-            "vmparams", "startcmd", "stopcmd", "powercmd", "start-timeout"
+            "vmparams", "startcmd", "stopcmd", "powercmd",
+            "start-timeout", "stop-timeout"
         ]
         if HAS_QUESTIONARY:
             try:
                 attr = questionary.select("Select attribute to set:", choices=attrs).ask()
             except Exception:
                 attr = Util.get_line(
-                    "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
+                    "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
                 ).strip()
         else:
             attr = Util.get_line(
-                "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout}: "
+                "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
             ).strip()
 
     val: Any = " ".join(val_list) if val_list else False
@@ -1080,18 +1094,19 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
     if not attr:
         attrs = [
             "os", "params", "resources", "kernel", "reservation",
-            "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power"
+            "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power",
+            "start-timeout", "stop-timeout"
         ]
         if HAS_QUESTIONARY:
             try:
                 attr = questionary.select("Select attribute to get:", choices=attrs).ask()
             except Exception:
                 attr = Util.get_line(
-                    "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
+                    "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
                 ).strip()
         else:
             attr = Util.get_line(
-                "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power}: "
+                "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
             ).strip()
 
     out(str(mach.get(attr)))
@@ -1140,7 +1155,7 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_clear_log_mach = p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_clear_log_mach.completer = machine_completer
 
-    p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show boot timing history and logs", formatter_class=HELP_FORMATTER)
+    p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show start/stop timing history and logs", formatter_class=HELP_FORMATTER)
     p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_hist_mach.completer = machine_completer
 

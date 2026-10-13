@@ -48,10 +48,16 @@ class MachineRepository:
                     stopcmd TEXT DEFAULT '',
                     powercmd TEXT DEFAULT '',
                     start_timeout INTEGER DEFAULT 240,
+                    stop_timeout INTEGER DEFAULT 30,
                     _is_started INTEGER DEFAULT 0
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_machines_mac ON machines(mac);")
+
+            # Check if stop_timeout exists in machines table
+            mach_cols = [col["name"] for col in conn.execute("PRAGMA table_info(machines);").fetchall()]
+            if "stop_timeout" not in mach_cols:
+                conn.execute("ALTER TABLE machines ADD COLUMN stop_timeout INTEGER DEFAULT 30;")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS boot_history (
@@ -59,19 +65,50 @@ class MachineRepository:
                     machine_name TEXT NOT NULL,
                     os TEXT NOT NULL DEFAULT '',
                     boot_type TEXT NOT NULL,
-                    duration INTEGER NOT NULL,
+                    start_duration INTEGER DEFAULT NULL,
+                    stop_duration INTEGER DEFAULT NULL,
                     timestamp INTEGER NOT NULL,
                     created_at TEXT NOT NULL DEFAULT ''
                 );
             """)
 
-            # Defensive schema migration in case boot_history previously existed without os or created_at
-            columns_info = conn.execute("PRAGMA table_info(boot_history);").fetchall()
-            col_names = [col["name"] for col in columns_info]
-            if "os" not in col_names:
-                conn.execute("ALTER TABLE boot_history ADD COLUMN os TEXT NOT NULL DEFAULT '';")
-            if "created_at" not in col_names:
-                conn.execute("ALTER TABLE boot_history ADD COLUMN created_at TEXT NOT NULL DEFAULT '';")
+            hist_cols = [col["name"] for col in conn.execute("PRAGMA table_info(boot_history);").fetchall()]
+            if "duration" in hist_cols:
+                # Migrate existing table to remove the legacy NOT NULL duration column
+                conn.execute("DROP TABLE IF EXISTS _boot_history_old;")
+                conn.execute("ALTER TABLE boot_history RENAME TO _boot_history_old;")
+                conn.execute("""
+                    CREATE TABLE boot_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        machine_name TEXT NOT NULL,
+                        os TEXT NOT NULL DEFAULT '',
+                        boot_type TEXT NOT NULL,
+                        start_duration INTEGER DEFAULT NULL,
+                        stop_duration INTEGER DEFAULT NULL,
+                        timestamp INTEGER NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT ''
+                    );
+                """)
+                old_cols = [c["name"] for c in conn.execute("PRAGMA table_info(_boot_history_old);").fetchall()]
+                os_expr = "os" if "os" in old_cols else "''"
+                start_expr = "start_duration" if "start_duration" in old_cols else "duration"
+                stop_expr = "stop_duration" if "stop_duration" in old_cols else "NULL"
+                created_expr = "created_at" if "created_at" in old_cols else "''"
+                conn.execute(f"""
+                    INSERT INTO boot_history (id, machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
+                    SELECT id, machine_name, {os_expr}, boot_type, {start_expr}, {stop_expr}, timestamp, {created_expr}
+                    FROM _boot_history_old;
+                """)
+                conn.execute("DROP TABLE _boot_history_old;")
+            else:
+                if "os" not in hist_cols:
+                    conn.execute("ALTER TABLE boot_history ADD COLUMN os TEXT NOT NULL DEFAULT '';")
+                if "created_at" not in hist_cols:
+                    conn.execute("ALTER TABLE boot_history ADD COLUMN created_at TEXT NOT NULL DEFAULT '';")
+                if "start_duration" not in hist_cols:
+                    conn.execute("ALTER TABLE boot_history ADD COLUMN start_duration INTEGER DEFAULT NULL;")
+                if "stop_duration" not in hist_cols:
+                    conn.execute("ALTER TABLE boot_history ADD COLUMN stop_duration INTEGER DEFAULT NULL;")
 
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_boot_history_lookup ON boot_history(machine_name, os, boot_type);"
@@ -134,7 +171,7 @@ class MachineRepository:
             "name", "mac", "ip", "arch", "os", "kernel",
             "reservation", "resources", "boot_params", "vm_params",
             "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
-            "start_timeout", "_is_started"
+            "start_timeout", "stop_timeout", "_is_started"
         ]
         vals = [str(m_dict.get(col, "") or "") for col in columns]
         placeholders = ", ".join(["?"] * len(columns))
@@ -163,7 +200,7 @@ class MachineRepository:
                 "name", "mac", "ip", "arch", "os", "kernel",
                 "reservation", "resources", "boot_params", "vm_params",
                 "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
-                "start_timeout"
+                "start_timeout", "stop_timeout"
             ]
             m_dict = {attr: getattr(machine, attr, "") for attr in attrs}
             m_dict["_is_started"] = getattr(machine, "_is_started", "0")
@@ -184,8 +221,8 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
-    def record_boot_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
-        """Record a successful boot duration and prune records older than the latest 10 samples for this target."""
+    def record_start_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
+        """Record start duration into a new run entry."""
         clean_os = os_name.strip() if os_name else "default"
         now_epoch = int(time.time())
         created_at_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -194,19 +231,19 @@ class MachineRepository:
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute(
                 """
-                INSERT INTO boot_history (machine_name, os, boot_type, duration, timestamp, created_at)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
+                VALUES (?, ?, ?, ?, NULL, ?, ?);
                 """,
                 (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
             )
-            # Prune to maintain only the 10 most recent entries per (machine_name, os, boot_type) tuple
+            # Prune old records beyond the last 20 samples
             conn.execute(
                 """
                 DELETE FROM boot_history
                 WHERE machine_name = ? AND os = ? AND boot_type = ? AND id NOT IN (
                     SELECT id FROM boot_history
                     WHERE machine_name = ? AND os = ? AND boot_type = ?
-                    ORDER BY timestamp DESC LIMIT 10
+                    ORDER BY timestamp DESC LIMIT 20
                 );
                 """,
                 (machine_name, clean_os, boot_type, machine_name, clean_os, boot_type),
@@ -214,17 +251,63 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
-    def get_calculated_timeout(
+    def record_stop_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
+        """Pair stop duration with the most recent open session for this machine."""
+        clean_os = os_name.strip() if os_name else "default"
+        now_epoch = int(time.time())
+        created_at_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with cls._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            row = conn.execute(
+                """
+                SELECT id, os FROM boot_history
+                WHERE machine_name = ? AND stop_duration IS NULL
+                ORDER BY timestamp DESC LIMIT 1;
+                """,
+                (machine_name,),
+            ).fetchone()
+
+            if row:
+                target_id = row["id"]
+                final_os = row["os"] if row["os"] and row["os"] != "default" else clean_os
+                conn.execute(
+                    """
+                    UPDATE boot_history
+                    SET stop_duration = ?, os = ?, boot_type = ?
+                    WHERE id = ?;
+                    """,
+                    (int(duration), final_os, boot_type, target_id),
+                )
+            else:
+                # Standalone stop execution without a prior start record
+                conn.execute(
+                    """
+                    INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
+                    VALUES (?, ?, ?, NULL, ?, ?, ?);
+                    """,
+                    (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
+                )
+            conn.commit()
+
+    # Backwards compatibility alias
+    record_boot_time = record_start_time
+
+    @classmethod
+    def get_calculated_start_timeout(
         cls, machine_name: str, os_name: str, boot_type: str, default_timeout: int = 240
     ) -> int:
-        """Calculate adaptive boot timeout based on rolling average multiplied by 1.25x."""
+        """Calculate start timeout based on rolling average multiplied by 1.25x."""
         clean_os = os_name.strip() if os_name else "default"
         with cls._get_connection() as conn:
             row = conn.execute(
                 """
-                SELECT AVG(duration) as avg_duration, COUNT(*) as sample_count
-                FROM boot_history
-                WHERE machine_name = ? AND os = ? AND boot_type = ?;
+                SELECT AVG(start_duration) as avg_duration, COUNT(start_duration) as sample_count
+                FROM (
+                    SELECT start_duration FROM boot_history
+                    WHERE machine_name = ? AND os = ? AND boot_type = ? AND start_duration IS NOT NULL
+                    ORDER BY timestamp DESC LIMIT 10
+                );
                 """,
                 (machine_name, clean_os, boot_type),
             ).fetchone()
@@ -236,9 +319,38 @@ class MachineRepository:
 
         return default_timeout
 
+    # Backwards compatibility alias
+    get_calculated_timeout = get_calculated_start_timeout
+
+    @classmethod
+    def get_calculated_stop_timeout(
+        cls, machine_name: str, os_name: str, boot_type: str, default_timeout: int = 30
+    ) -> int:
+        """Calculate stop timeout based on rolling average multiplied by 2x."""
+        clean_os = os_name.strip() if os_name else "default"
+        with cls._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT AVG(stop_duration) as avg_duration, COUNT(stop_duration) as sample_count
+                FROM (
+                    SELECT stop_duration FROM boot_history
+                    WHERE machine_name = ? AND os = ? AND boot_type = ? AND stop_duration IS NOT NULL
+                    ORDER BY timestamp DESC LIMIT 10
+                );
+                """,
+                (machine_name, clean_os, boot_type),
+            ).fetchone()
+
+            if row and row["sample_count"] is not None and row["sample_count"] >= 3:
+                avg_duration = float(row["avg_duration"])
+                calculated = int(avg_duration * 2.0)
+                return max(10, calculated)
+
+        return default_timeout
+
     @classmethod
     def get_boot_history(cls, machine_name: Optional[str] = None) -> List[dict]:
-        """Query boot history rows ordered chronologically descending."""
+        """Query paired start and stop history records ordered chronologically descending."""
         with cls._get_connection() as conn:
             if machine_name:
                 rows = conn.execute(

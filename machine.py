@@ -49,7 +49,7 @@ def SLEEP_ON_LOCK(seconds: int) -> None:
 class Machine:
     # Class tunables for machine management
     start_timeout_default: int = 4 * 60
-    stop_timeout: int = 30
+    stop_timeout_default: int = 30
     ssh_cmd_timeout: int = 1 * 60
     power_cycle_delay: int = 30
     resource_wait_timeout: int = 20 * 60 * 60
@@ -85,6 +85,7 @@ class Machine:
         self.stopcmd: str = ""
         self.powercmd: str = ""
         self.start_timeout: int = self.start_timeout_default
+        self.stop_timeout: int = self.stop_timeout_default
 
         self._lock: int = 0
         self._lock_stream: Optional[Any] = None
@@ -227,6 +228,12 @@ class Machine:
         except (ValueError, TypeError):
             self.start_timeout = self.start_timeout_default
 
+        stop_tout = get_val("stop_timeout")
+        try:
+            self.stop_timeout = int(stop_tout) if stop_tout and str(stop_tout).strip() else self.stop_timeout_default
+        except (ValueError, TypeError):
+            self.stop_timeout = self.stop_timeout_default
+
     def fill_from_xmlobj(self, obj: Any) -> None:
         """Backwards compatibility wrapper for XML elements or dictionaries."""
         if isinstance(obj, dict):
@@ -265,6 +272,7 @@ class Machine:
             "stopcmd": get_val("stopcmd"),
             "powercmd": get_val("powercmd"),
             "start_timeout": get_val("start_timeout"),
+            "stop_timeout": get_val("stop_timeout"),
         }
         self.fill_from_dict(d)
 
@@ -288,6 +296,7 @@ class Machine:
             "stopcmd": self.stopcmd,
             "powercmd": self.powercmd,
             "start_timeout": self.start_timeout,
+            "stop_timeout": self.stop_timeout,
             "_is_started": self._is_started,
         }
 
@@ -480,6 +489,7 @@ class Machine:
             table.add_row("Power command", self.powercmd)
             table.add_row("Power usage", self.get_power())
         table.add_row("Start timeout", f"{self.start_timeout}s")
+        table.add_row("Stop timeout", f"{self.stop_timeout}s")
         if self.boot_params:
             table.add_row("Boot params", self.boot_params)
         if self.vm_params:
@@ -588,12 +598,19 @@ class Machine:
             self.powercmd = str(val)
             MachineRepository.update_fields(self.name, {"powercmd": str(val)})
         elif attr == "start-timeout":
-            out(f"Current start-timeout: {self.start_timeout}")
             if not val:
+                out(f"Current start-timeout: {self.start_timeout}")
                 val = prompt_text("Enter new start-timeout (leave empty for default):")
             tout = int(val) if val else self.start_timeout_default
             self.start_timeout = tout
             MachineRepository.update_fields(self.name, {"start_timeout": tout})
+        elif attr in ("stop-timeout", "stop_timeout"):
+            if not val:
+                out(f"Current stop-timeout: {self.stop_timeout}")
+                val = prompt_text("Enter new stop-timeout (leave empty for default):")
+            tout = int(val) if val else self.stop_timeout_default
+            self.stop_timeout = tout
+            MachineRepository.update_fields(self.name, {"stop_timeout": tout})
 
     def get(self, attr: str) -> Any:
         mapping = {
@@ -609,6 +626,8 @@ class Machine:
             "stopcmd": self.stopcmd,
             "powercmd": self.powercmd,
             "power": self.get_power(),
+            "start-timeout": self.start_timeout,
+            "stop-timeout": self.stop_timeout,
         }
         if attr in mapping:
             return mapping[attr]
@@ -748,7 +767,7 @@ class Machine:
                 self.debug(f"Start command: {startcmd}")
                 subprocess.run(startcmd, shell=True)
 
-        effective_timeout = MachineRepository.get_calculated_timeout(
+        effective_timeout = MachineRepository.get_calculated_start_timeout(
             self.name, self.os, "bm", default_timeout=self.start_timeout
         )
         self.debug(f"Using bare-metal boot timeout: {effective_timeout}s for OS {self.os}")
@@ -758,8 +777,8 @@ class Machine:
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_boot_time(self.name, self.os, "bm", elapsed)
-            new_timeout = MachineRepository.get_calculated_timeout(self.name, self.os, "bm")
+            MachineRepository.record_start_time(self.name, self.os, "bm", elapsed)
+            new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "bm")
             self.set("start-timeout", new_timeout)
             self.debug(
                 f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
@@ -864,7 +883,7 @@ class Machine:
 
         time.sleep(3)
 
-        effective_timeout = MachineRepository.get_calculated_timeout(
+        effective_timeout = MachineRepository.get_calculated_start_timeout(
             self.name, self.os, "vm", default_timeout=self.start_timeout
         )
         self.debug(f"Using VM boot timeout: {effective_timeout}s for OS {self.os}")
@@ -874,8 +893,8 @@ class Machine:
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_boot_time(self.name, self.os, "vm", elapsed)
-            new_timeout = MachineRepository.get_calculated_timeout(self.name, self.os, "vm")
+            MachineRepository.record_start_time(self.name, self.os, "vm", elapsed)
+            new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "vm")
             self.set("start-timeout", new_timeout)
             self.debug(
                 f"VM boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
@@ -892,12 +911,28 @@ class Machine:
 
         self.out("Stopping machine")
 
+        boot_type = "vm" if self.is_vm() else "bm"
+        effective_timeout = MachineRepository.get_calculated_stop_timeout(
+            self.name, self.os, boot_type, default_timeout=self.stop_timeout
+        )
+        self.debug(f"Using {boot_type.upper()} stop timeout: {effective_timeout}s for OS {self.os}")
+
         status = self.get_status()
+        t_stop_start = time.time()
 
         if status == "online":
             self.ssh_cmd("poweroff")
 
-        if self.wait_for_status("offline", self.stop_timeout):
+        if self.wait_for_status("offline", effective_timeout):
+            if status == "online":
+                elapsed = int(time.time() - t_stop_start)
+                MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed)
+                new_timeout = MachineRepository.get_calculated_stop_timeout(self.name, self.os, boot_type)
+                self.set("stop-timeout", new_timeout)
+                self.debug(
+                    f"{boot_type.upper()} stop finished in {elapsed}s. Updated stop timeout for {self.os} to {new_timeout}s."
+                )
+
             if self.stopcmd:
                 stopcmd = self._preprocess_cmd(self.stopcmd)
                 self.debug(f"Stop command: {stopcmd}")
