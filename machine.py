@@ -39,6 +39,7 @@ class Machine:
         self.mac: str = mac.lower()
         self.ip: str = ""
         self._is_started: str = "0"
+        self.state: str = ""
         self.arch: str = ""
         self.os: str = ""
         self.kernel: str = ""
@@ -152,6 +153,7 @@ class Machine:
         self.mac = get_val("mac").lower()
         self.ip = get_val("ip")
         self._is_started = get_val("_is_started", "0")
+        self.state = get_val("state")
         self.arch = get_val("arch")
         self.os = get_val("os")
         self.kernel = get_val("kernel")
@@ -202,6 +204,7 @@ class Machine:
             "mac": get_val("mac"),
             "ip": get_val("ip"),
             "_is_started": get_val("_is_started") or get_val("is_started"),
+            "state": get_val("state"),
             "arch": get_val("arch"),
             "os": get_val("os"),
             "kernel": get_val("kernel"),
@@ -226,6 +229,7 @@ class Machine:
             "name": self.name,
             "mac": self.mac,
             "ip": self.ip,
+            "state": self.state,
             "arch": self.arch,
             "os": self.os,
             "kernel": self.kernel,
@@ -243,6 +247,29 @@ class Machine:
             "stop_timeout": self.stop_timeout,
             "_is_started": self._is_started,
         }
+
+    def set_state(self, state: str) -> None:
+        """Record the latest boot sequence state for this machine."""
+        self.state = state
+        MachineRepository.update_fields(self.name, {"state": state})
+        self.debug(f"State: {state}")
+
+    @classmethod
+    def set_state_by_name(cls, name: str, state: str) -> None:
+        """Update state directly by machine name."""
+        if name:
+            MachineRepository.update_fields(name, {"state": state})
+
+    @classmethod
+    def set_state_by_mac(cls, mac: str, state: str) -> None:
+        """Update state directly by MAC address lookup."""
+        if not mac:
+            return
+        mach = cls.find_by_mac(mac)
+        if mach:
+            mach.set_state(state)
+        else:
+            MachineRepository.update_fields(mac, {"state": state})
 
     def save(self) -> None:
         """Upsert complete machine configuration to SQLite."""
@@ -262,10 +289,11 @@ class Machine:
         fatal("Failed to load machine")
 
     def clear(self) -> None:
-        """Atomically clear IP, started status, and boot_params in DB."""
+        """Atomically clear IP, started status, state, and boot_params in DB."""
         self.ip = ""
         self._is_started = "0"
-        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0"})
+        self.state = ""
+        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0", "state": ""})
         self.debug("cleared machine state")
 
     def clear_job(self) -> None:
@@ -316,6 +344,8 @@ class Machine:
             if self.ip != ip:
                 self.debug(f"Changing IP {self.ip} -> {ip}")
                 self.set_ip(ip)
+                if self.is_started() and self.state in ("powering-on", "starting-vm", "power-cycling", ""):
+                    self.set_state("dhcp-bound")
 
         return ip
 
@@ -432,6 +462,7 @@ class Machine:
         table.add_row("OS", self.os or "-")
         table.add_row("Kernel", self.kernel or "-")
         table.add_row("Status", status_str)
+        table.add_row("State", f"[bold cyan]{self.state}[/bold cyan]" if self.state else "-")
 
         if self.reservation:
             table.add_row("Reserved by", f"[bold magenta]{self.reservation}[/bold magenta]")
@@ -474,7 +505,14 @@ class Machine:
                     return Util.get_line(f"{prompt_msg} ")
             return Util.get_line(f"{prompt_msg} ")
 
-        if attr == "os":
+        if attr == "state":
+            out(f"Current state: {self.state or '(none)'}")
+            if not val:
+                val = prompt_text("Enter new state:")
+            val_str = str(val).strip()
+            self.set_state(val_str)
+            self.out(f"Setting state to: {val_str}")
+        elif attr == "os":
             arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
             os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
             os_str = f"{arch}/{os_name}"
@@ -574,6 +612,8 @@ class Machine:
 
     def get(self, attr: str) -> Any:
         mapping = {
+            "state": self.state,
+            "status": self.get_status(),
             "params": self.boot_params,
             "vmparams": self.vm_params,
             "os": self.os,
@@ -654,6 +694,8 @@ class Machine:
         if not self.resources.strip():
             return True
 
+        self.set_state("waiting-for-resources")
+
         console = Console()
         start_time = time.time()
 
@@ -707,6 +749,7 @@ class Machine:
             return False
 
         if status == "unreachable":
+            self.set_state("power-cycling")
             self.stop()
             self.debug(f"Waiting for power cycle delay: {self.power_cycle_delay}")
             time.sleep(self.power_cycle_delay)
@@ -722,10 +765,13 @@ class Machine:
         MachineRepository.update_fields(self.name, {"_is_started": "1"})
 
         if status == "offline":
+            self.set_state("powering-on")
             if self.startcmd:
                 startcmd = self._preprocess_cmd(self.startcmd)
                 self.debug(f"Start command: {startcmd}")
                 subprocess.run(startcmd, shell=True)
+        else:
+            self.set_state("booting")
 
         effective_timeout = MachineRepository.get_calculated_start_timeout(
             self.name, self.os, "bm", default_timeout=self.start_timeout
@@ -736,6 +782,7 @@ class Machine:
         ret = self.wait_for_status("online", effective_timeout)
 
         if ret:
+            self.set_state("online")
             elapsed = int(time.time() - t_start)
             MachineRepository.record_start_time(self.name, self.os, "bm", elapsed, start_time=int(t_start))
             new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "bm")
@@ -744,6 +791,7 @@ class Machine:
                 f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
             )
         else:
+            self.set_state("boot-failed")
             self.stop()
 
         return ret
@@ -784,6 +832,7 @@ class Machine:
             return False
 
         self._is_started = "1"
+        self.set_state("starting-vm")
         MachineRepository.update_fields(self.name, {"_is_started": "1"})
 
         self.out(f"Starting virtual machine with OS {self.os} and kernel {self.kernel}")
@@ -852,6 +901,7 @@ class Machine:
         ret = self.wait_for_status("online", effective_timeout)
 
         if ret:
+            self.set_state("online")
             elapsed = int(time.time() - t_start)
             MachineRepository.record_start_time(self.name, self.os, "vm", elapsed, start_time=int(t_start))
             new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "vm")
@@ -860,6 +910,7 @@ class Machine:
                 f"VM boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
             )
         else:
+            self.set_state("boot-failed")
             self.kill_vm()
             self.clear()
 
@@ -870,6 +921,7 @@ class Machine:
             return True
 
         self.out("Stopping machine")
+        self.set_state("stopping")
 
         boot_type = "vm" if self.is_vm() else "bm"
         effective_timeout = MachineRepository.get_calculated_stop_timeout(
@@ -906,6 +958,7 @@ class Machine:
         if self.is_vm():
             self.kill_vm()
 
+        self.set_state("offline")
         self.clear()
         return True
 

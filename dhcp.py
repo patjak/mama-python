@@ -229,7 +229,7 @@ class DnsmasqManager:
 
     @classmethod
     def sync_leases_to_db(cls) -> None:
-        """Update any machines lacking an IP in SQLite using active lease data."""
+        """Update any machines lacking an IP in SQLite using active lease data and record DHCP state."""
         leases = cls.get_active_leases()
         if not leases:
             return
@@ -239,5 +239,8 @@ class DnsmasqManager:
             current_ip = m_data.get("ip", "")
             if mac in leases and not current_ip:
                 assigned_ip = leases[mac]
-                MachineRepository.update_fields(m_data["name"], {"ip": assigned_ip})
+                MachineRepository.update_fields(
+                    m_data["name"],
+                    {"ip": assigned_ip, "state": "dhcp-bound"},
+                )
                 debug(f"[DHCP] Auto-discovered IP {assigned_ip} for {m_data['name']} from DHCP lease")

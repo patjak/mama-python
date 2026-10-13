@@ -126,7 +126,8 @@ start-vm [machine]                              - boot virtual instance of machi
 stop [machine]                                  - triggers power button
 clear [machine | all]                           - stop machine and clear stale data (ip, job, etc)
 connect [machine]                               - connect to machine with ssh
-set <machine>   os <os>                         - set os for machine
+set <machine>   state <state>                   - set machine boot state
+                os <os>                         - set os for machine
                 kernel <kernel>                 - set kernel for machine
                 resources <resources>           - comma separated list of resources to set
                 params <boot parameters>        - Set additional kernel command line parameters
@@ -136,10 +137,10 @@ set <machine>   os <os>                         - set os for machine
                 powercmd <command>              - Run a command to fetch current power usage in Watts
                 start-timeout <seconds>         - Set machine start timeout in seconds
                 stop-timeout <seconds>          - Set machine stop timeout in seconds
-get <machine> [os | params | resources | kernel - Get machine attribute
+get <machine> [state | status | os | params | resources | kernel
                reservation | ip | mac | vmparams |
                startcmd | stopcmd | powercmd | power |
-               start-timeout | stop-timeout ]
+               start-timeout | stop-timeout ]   - Get machine attribute
 reserve <machine>                               - Reserve the machine for the current user
 release <machine>                               - Release any reservation you have on the machine
 release-forced <machine>                        - Release the machine even if you didn't reserve it
@@ -340,6 +341,7 @@ def cmd_list() -> None:
     table.add_column("IP", style="green")
     table.add_column("MAC", style="magenta")
     table.add_column("Status")
+    table.add_column("State", style="cyan")
     table.add_column("On", justify="center")
     table.add_column("Pwr", justify="right", style="yellow")
     table.add_column("VM", justify="center")
@@ -370,6 +372,7 @@ def cmd_list() -> None:
             "ip": ip,
             "mac": mach.mac,
             "status_str": status_str,
+            "state_str": mach.state or "-",
             "started_str": started_str,
             "power": mach.get_power(),
             "vm_str": vm_str,
@@ -387,6 +390,7 @@ def cmd_list() -> None:
             data["ip"],
             data["mac"],
             data["status_str"],
+            data["state_str"],
             data["started_str"],
             data["power"],
             data["vm_str"],
@@ -1095,7 +1099,7 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
 
     if not attr:
         attrs = [
-            "os", "kernel", "resources", "params",
+            "state", "os", "kernel", "resources", "params",
             "vmparams", "startcmd", "stopcmd", "powercmd",
             "start-timeout", "stop-timeout"
         ]
@@ -1104,11 +1108,11 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
                 attr = questionary.select("Select attribute to set:", choices=attrs).ask()
             except Exception:
                 attr = Util.get_line(
-                    "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
+                    "{state | os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
                 ).strip()
         else:
             attr = Util.get_line(
-                "{os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
+                "{state | os | kernel | resources | params | vmparams | startcmd | stopcmd | powercmd | start-timeout | stop-timeout}: "
             ).strip()
 
     val: Any = " ".join(val_list) if val_list else False
@@ -1137,7 +1141,7 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
 
     if not attr:
         attrs = [
-            "os", "params", "resources", "kernel", "reservation",
+            "state", "status", "os", "params", "resources", "kernel", "reservation",
             "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power",
             "start-timeout", "stop-timeout"
         ]
@@ -1146,11 +1150,11 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
                 attr = questionary.select("Select attribute to get:", choices=attrs).ask()
             except Exception:
                 attr = Util.get_line(
-                    "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
+                    "{state | status | os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
                 ).strip()
         else:
             attr = Util.get_line(
-                "{os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
+                "{state | status | os | params | resources | kernel | reservation | ip | mac | vmparams | startcmd | stopcmd | powercmd | power | start-timeout | stop-timeout}: "
             ).strip()
 
     out(str(mach.get(attr)))
@@ -1371,7 +1375,7 @@ def main() -> None:
         "no-overwrite": parsed_args.no_overwrite,
     }
 
-    db_path = getattr(config, "DB_FILE", f"{getattr(config, "MAMA_PATH", "/usr/share/mama")}/mama.db")
+    db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
     if MachineRepository.load() is False:
         fatal(f"Failed to initialize database: {db_path}\n")
 

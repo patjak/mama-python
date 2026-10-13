@@ -16,6 +16,7 @@ sys.path.insert(0, str(script_dir))
 
 import config
 from dhcp import DnsmasqManager
+from machine import Machine
 from main import bootinfo
 from repository import MachineRepository
 
@@ -138,6 +139,19 @@ class TFTPServer:
             sys.stderr.write(f"[boot.py] [TFTP] File not found: {raw_filename} requested by {client_addr[0]}\n")
             self._send_error(client_addr, 1, f"File not found: {raw_filename}")
             return
+
+        # Track boot sequence state from TFTP client
+        try:
+            client_mac = clean_mac(get_mac_from_ip(client_addr[0]))
+            if client_mac:
+                if "autoexec.ipxe" in raw_filename:
+                    Machine.set_state_by_mac(client_mac, "tftp-fetching-autoexec")
+                elif any(loader in raw_filename for loader in ("kpxe", "ipxe.efi", "ipxe-arm64.efi", ".efi")):
+                    Machine.set_state_by_mac(client_mac, f"tftp-pxe-boot ({raw_filename})")
+                else:
+                    Machine.set_state_by_mac(client_mac, f"tftp-fetching ({raw_filename})")
+        except Exception:
+            pass
 
         # Clarify probe vs transfer in log output
         if options.get("tsize") == "0":
@@ -298,6 +312,28 @@ class iPXEHandler(BaseHTTPRequestHandler):
             is_safe = False
 
         if is_safe and target_file.exists() and target_file.is_file():
+            parts = pathlib.Path(clean_path).parts
+            if len(parts) >= 2 and parts[0] == "machines":
+                mach_name = parts[1]
+                fname = target_file.name
+                if fname.startswith("initrd"):
+                    Machine.set_state_by_name(mach_name, "fetching-initrd")
+                elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
+                    Machine.set_state_by_name(mach_name, "fetching-kernel")
+                else:
+                    Machine.set_state_by_name(mach_name, f"fetching-{fname}")
+            else:
+                client_ip = self.client_address[0]
+                client_mac = clean_mac(get_mac_from_ip(client_ip))
+                if client_mac:
+                    fname = target_file.name
+                    if fname.startswith("initrd"):
+                        Machine.set_state_by_mac(client_mac, "fetching-initrd")
+                    elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
+                        Machine.set_state_by_mac(client_mac, "fetching-kernel")
+                    else:
+                        Machine.set_state_by_mac(client_mac, f"fetching-{fname}")
+
             self._send_file(target_file)
             return
 
@@ -327,6 +363,8 @@ class iPXEHandler(BaseHTTPRequestHandler):
             self._send_response(200, response)
             return
 
+        # Track that the machine has reached the HTTP iPXE boot phase
+        Machine.set_state_by_mac(mac, "ipxe-boot-config")
         MachineRepository.load()
 
         try:
