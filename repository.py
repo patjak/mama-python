@@ -26,7 +26,7 @@ class MachineRepository:
 
     @classmethod
     def init_db(cls) -> None:
-        """Initialize table and indexes."""
+        """Initialize tables and indexes."""
         with cls._get_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS machines (
@@ -51,6 +51,16 @@ class MachineRepository:
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_machines_mac ON machines(mac);")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS boot_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    machine_name TEXT NOT NULL,
+                    boot_type TEXT NOT NULL,
+                    duration INTEGER NOT NULL,
+                    timestamp INTEGER NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_boot_history_mach ON boot_history(machine_name, boot_type);")
             conn.commit()
 
     @classmethod
@@ -157,6 +167,48 @@ class MachineRepository:
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute("DELETE FROM machines WHERE name = ?", (name,))
             conn.commit()
+
+    @classmethod
+    def record_boot_time(cls, machine_name: str, boot_type: str, duration: int) -> None:
+        """Record a successful boot duration and keep the 10 most recent samples."""
+        with cls._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute(
+                "INSERT INTO boot_history (machine_name, boot_type, duration, timestamp) VALUES (?, ?, ?, ?);",
+                (machine_name, boot_type, int(duration), int(time.time())),
+            )
+            conn.execute(
+                """
+                DELETE FROM boot_history
+                WHERE machine_name = ? AND boot_type = ? AND id NOT IN (
+                    SELECT id FROM boot_history
+                    WHERE machine_name = ? AND boot_type = ?
+                    ORDER BY timestamp DESC LIMIT 10
+                );
+            """,
+                (machine_name, boot_type, machine_name, boot_type),
+            )
+            conn.commit()
+
+    @classmethod
+    def get_calculated_timeout(cls, machine_name: str, boot_type: str, default_timeout: int = 240) -> int:
+        """Calculate adaptive boot timeout based on rolling average + 25% margin + 30s buffer."""
+        with cls._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT AVG(duration) as avg_duration, COUNT(*) as sample_count
+                FROM boot_history
+                WHERE machine_name = ? AND boot_type = ?;
+            """,
+                (machine_name, boot_type),
+            ).fetchone()
+
+            if row and row["sample_count"] is not None and row["sample_count"] >= 3:
+                avg_duration = float(row["avg_duration"])
+                calculated = int(avg_duration * 1.25) + 30
+                return max(45, calculated)
+
+        return default_timeout
 
 
 # Module-level locking functions expected by job.py, machine.py, etc.
