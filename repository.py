@@ -68,6 +68,7 @@ class MachineRepository:
                     start_duration INTEGER DEFAULT NULL,
                     stop_duration INTEGER DEFAULT NULL,
                     timestamp INTEGER NOT NULL,
+                    stop_timestamp INTEGER DEFAULT NULL,
                     created_at TEXT NOT NULL DEFAULT ''
                 );
             """)
@@ -86,6 +87,7 @@ class MachineRepository:
                         start_duration INTEGER DEFAULT NULL,
                         stop_duration INTEGER DEFAULT NULL,
                         timestamp INTEGER NOT NULL,
+                        stop_timestamp INTEGER DEFAULT NULL,
                         created_at TEXT NOT NULL DEFAULT ''
                     );
                 """)
@@ -93,10 +95,11 @@ class MachineRepository:
                 os_expr = "os" if "os" in old_cols else "''"
                 start_expr = "start_duration" if "start_duration" in old_cols else "duration"
                 stop_expr = "stop_duration" if "stop_duration" in old_cols else "NULL"
+                stop_ts_expr = "stop_timestamp" if "stop_timestamp" in old_cols else "NULL"
                 created_expr = "created_at" if "created_at" in old_cols else "''"
                 conn.execute(f"""
-                    INSERT INTO boot_history (id, machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
-                    SELECT id, machine_name, {os_expr}, boot_type, {start_expr}, {stop_expr}, timestamp, {created_expr}
+                    INSERT INTO boot_history (id, machine_name, os, boot_type, start_duration, stop_duration, timestamp, stop_timestamp, created_at)
+                    SELECT id, machine_name, {os_expr}, boot_type, {start_expr}, {stop_expr}, timestamp, {stop_ts_expr}, {created_expr}
                     FROM _boot_history_old;
                 """)
                 conn.execute("DROP TABLE _boot_history_old;")
@@ -109,6 +112,8 @@ class MachineRepository:
                     conn.execute("ALTER TABLE boot_history ADD COLUMN start_duration INTEGER DEFAULT NULL;")
                 if "stop_duration" not in hist_cols:
                     conn.execute("ALTER TABLE boot_history ADD COLUMN stop_duration INTEGER DEFAULT NULL;")
+                if "stop_timestamp" not in hist_cols:
+                    conn.execute("ALTER TABLE boot_history ADD COLUMN stop_timestamp INTEGER DEFAULT NULL;")
 
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_boot_history_lookup ON boot_history(machine_name, os, boot_type);"
@@ -221,18 +226,25 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
-    def record_start_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
+    def record_start_time(
+        cls,
+        machine_name: str,
+        os_name: str,
+        boot_type: str,
+        duration: int,
+        start_time: Optional[int] = None,
+    ) -> None:
         """Record start duration into a new run entry."""
         clean_os = os_name.strip() if os_name else "default"
-        now_epoch = int(time.time())
-        created_at_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_epoch = int(start_time) if start_time is not None else int(time.time())
+        created_at_str = datetime.datetime.fromtimestamp(now_epoch).strftime("%Y-%m-%d %H:%M:%S")
 
         with cls._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute(
                 """
-                INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
-                VALUES (?, ?, ?, ?, NULL, ?, ?);
+                INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, stop_timestamp, created_at)
+                VALUES (?, ?, ?, ?, NULL, ?, NULL, ?);
                 """,
                 (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
             )
@@ -251,10 +263,17 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
-    def record_stop_time(cls, machine_name: str, os_name: str, boot_type: str, duration: int) -> None:
+    def record_stop_time(
+        cls,
+        machine_name: str,
+        os_name: str,
+        boot_type: str,
+        duration: int,
+        stop_time: Optional[int] = None,
+    ) -> None:
         """Pair stop duration with the most recent open session for this machine."""
         clean_os = os_name.strip() if os_name else "default"
-        now_epoch = int(time.time())
+        now_epoch = int(stop_time) if stop_time is not None else int(time.time())
         created_at_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with cls._get_connection() as conn:
@@ -274,19 +293,18 @@ class MachineRepository:
                 conn.execute(
                     """
                     UPDATE boot_history
-                    SET stop_duration = ?, os = ?, boot_type = ?
+                    SET stop_duration = ?, stop_timestamp = ?, os = ?, boot_type = ?
                     WHERE id = ?;
                     """,
-                    (int(duration), final_os, boot_type, target_id),
+                    (int(duration), now_epoch, final_os, boot_type, target_id),
                 )
             else:
-                # Standalone stop execution without a prior start record
                 conn.execute(
                     """
-                    INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, created_at)
-                    VALUES (?, ?, ?, NULL, ?, ?, ?);
+                    INSERT INTO boot_history (machine_name, os, boot_type, start_duration, stop_duration, timestamp, stop_timestamp, created_at)
+                    VALUES (?, ?, ?, NULL, ?, ?, ?, ?);
                     """,
-                    (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
+                    (machine_name, clean_os, boot_type, int(duration), now_epoch, now_epoch, created_at_str),
                 )
             conn.commit()
 

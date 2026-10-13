@@ -777,7 +777,7 @@ class Machine:
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_start_time(self.name, self.os, "bm", elapsed)
+            MachineRepository.record_start_time(self.name, self.os, "bm", elapsed, start_time=int(t_start))
             new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "bm")
             self.set("start-timeout", new_timeout)
             self.debug(
@@ -893,7 +893,7 @@ class Machine:
 
         if ret:
             elapsed = int(time.time() - t_start)
-            MachineRepository.record_start_time(self.name, self.os, "vm", elapsed)
+            MachineRepository.record_start_time(self.name, self.os, "vm", elapsed, start_time=int(t_start))
             new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "vm")
             self.set("start-timeout", new_timeout)
             self.debug(
@@ -926,7 +926,7 @@ class Machine:
         if self.wait_for_status("offline", effective_timeout):
             if status == "online":
                 elapsed = int(time.time() - t_stop_start)
-                MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed)
+                MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed, stop_time=int(time.time()))
                 new_timeout = MachineRepository.get_calculated_stop_timeout(self.name, self.os, boot_type)
                 self.set("stop-timeout", new_timeout)
                 self.debug(

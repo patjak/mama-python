@@ -6,6 +6,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from typing import Any, List, Optional, Tuple, Union
 
 from rich.console import Console
@@ -41,6 +42,25 @@ from machine import Machine
 from options import Options
 from os_mgr import Arch, Os
 from repository import MachineRepository, Util
+
+
+def format_duration(seconds: int) -> str:
+    """Format duration into human-readable compact units (e.g., 45s, 12m 30s, 2h 15m)."""
+    if seconds < 0:
+        return "0s"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
 
 
 def machine_completer(prefix: str, parsed_args: Any, **kwargs: Any) -> List[str]:
@@ -206,7 +226,6 @@ def select_os(mach: Machine) -> Os:
         except Exception:
             pass
 
-    # Fallback to Rich Table + numeric selection
     console = Console()
     table = Table(
         title=f"Select OS for Machine: {mach.name}",
@@ -569,6 +588,8 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
     table.add_column("Stop Time", justify="right", style="yellow")
     table.add_column("Recorded At", style="cyan")
 
+    now = int(time.time())
+
     for idx, row in enumerate(records, start=1):
         mode_str = "[cyan]VM[/cyan]" if row["boot_type"] == "vm" else "[magenta]Bare Metal[/magenta]"
         start_dur = row.get("start_duration")
@@ -579,6 +600,19 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
         stop_dur = row.get("stop_duration")
         stop_str = f"{stop_dur}s" if stop_dur is not None else "[dim]-[/dim]"
 
+        created_str = row.get("created_at") or "-"
+        start_ts = row.get("timestamp")
+        stop_ts = row.get("stop_timestamp")
+
+        if stop_ts and start_ts:
+            duration_until_stop = max(0, stop_ts - start_ts)
+            recorded_str = f"{created_str} [dim]({format_duration(duration_until_stop)})[/dim]"
+        elif stop_dur is None and start_ts:
+            active_duration = max(0, now - start_ts)
+            recorded_str = f"{created_str} [bold green](running: {format_duration(active_duration)})[/bold green]"
+        else:
+            recorded_str = created_str
+
         table.add_row(
             str(idx),
             row["machine_name"],
@@ -586,7 +620,7 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
             mode_str,
             start_str,
             stop_str,
-            row.get("created_at") or "-",
+            recorded_str,
         )
 
     console.print(table)
