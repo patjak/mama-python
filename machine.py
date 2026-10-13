@@ -275,6 +275,17 @@ class Machine:
         MachineRepository.update_fields(self.name, {"job": "", "job_pid": ""})
         self.debug("cleared job")
 
+    def get_ip_from_leases(self) -> Optional[str]:
+        """Resolve IP address from active dnsmasq DHCP leases."""
+        if not getattr(config, "DHCP_ENABLED", True):
+            return None
+        try:
+            from dhcp import DnsmasqManager
+            leases = DnsmasqManager.get_active_leases()
+            return leases.get(self.mac.lower())
+        except Exception:
+            return None
+
     def get_ip_from_mac(self) -> Optional[str]:
         if not self.is_started():
             return None
@@ -291,7 +302,12 @@ class Machine:
         return None
 
     def get_ip(self) -> Optional[str]:
-        ip = self.get_ip_from_mac()
+        # 1. Check active dnsmasq DHCP leases
+        ip = self.get_ip_from_leases()
+
+        # 2. Fallback to neighbor ARP table
+        if not ip:
+            ip = self.get_ip_from_mac()
 
         if not ip:
             self.load()

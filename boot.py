@@ -15,6 +15,7 @@ script_dir = pathlib.Path(__file__).parent.resolve()
 sys.path.insert(0, str(script_dir))
 
 import config
+from dhcp import DnsmasqManager
 from main import bootinfo
 from repository import MachineRepository
 
@@ -27,9 +28,16 @@ def clean_mac(mac_str: str) -> str:
 
 
 def get_mac_from_ip(client_ip: str) -> str:
-    """Extract client MAC address from neighbor ARP table given client IP."""
+    """Extract client MAC address from DHCP leases or neighbor ARP table given client IP."""
     if not client_ip:
         return ""
+
+    if getattr(config, "DHCP_ENABLED", True):
+        leases = DnsmasqManager.get_active_leases()
+        for mac, ip in leases.items():
+            if ip == client_ip:
+                return clean_mac(mac)
+
     try:
         cmd = f"ip -4 neigh | grep {client_ip}"
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -56,7 +64,7 @@ class TFTPServer:
     def start(self) -> threading.Thread | None:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SOL_REUSEADDR, 1)
             self.sock.bind((self.host, self.port))
             self._running = True
             sys.stderr.write(f"[boot.py] Starting MAMA TFTP Server on udp://{self.host}:{self.port}...\n")
@@ -389,6 +397,11 @@ def main() -> None:
 
     # Automatically write autoexec.ipxe on startup
     generate_autoexec_ipxe(mama_base, bind_addr, port)
+
+    # Initialize and synchronize dnsmasq DHCP server on openSUSE
+    if getattr(config, "DHCP_ENABLED", True):
+        sys.stderr.write("[boot.py] Synchronizing dnsmasq DHCP server...\n")
+        DnsmasqManager.reload_or_restart()
 
     # Start TFTP Server thread bound to MAMA_HOST interface
     tftp_server = TFTPServer(bind_addr, tftp_port, mama_base)

@@ -36,6 +36,7 @@ except ImportError:
 
 # Environment & helper stubs
 import config
+from dhcp import DnsmasqManager
 from job import Job
 from logger import Log, debug, error, fatal, out
 from machine import Machine
@@ -144,6 +145,8 @@ release <machine>                               - Release any reservation you ha
 release-forced <machine>                        - Release the machine even if you didn't reserve it
 wait <machine>                                  - Wait for a machine to become available for use
 serve                                           - start the iPXE boot server
+dhcp sync                                       - regenerate dnsmasq config and reload service
+dhcp leases                                     - list active DHCP leases
 """
     out(usage, no_eol=True, timestamp=False)
 
@@ -483,6 +486,9 @@ def cmd_new() -> None:
     MachineRepository.add_machine(m)
     out("New machine created")
 
+    if getattr(config, "DHCP_ENABLED", True):
+        DnsmasqManager.reload_or_restart()
+
 
 def cmd_list_os(m: Union[str, bool] = False) -> None:
     console = Console()
@@ -721,7 +727,6 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
                 subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
                 return
 
-        # Find kernel version for dracut
         res_k = subprocess.run(f"ls {tmp_dir / 'boot' / 'config-*'}", shell=True, capture_output=True, text=True)
         if res_k.returncode != 0:
             error("Failed to find /boot/config-*")
@@ -866,7 +871,6 @@ def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name
         debug("Skipping copy-os since os exists and no-overwrite was specified")
         return
 
-    # Sort acquisition order to prevent AB-BA deadlocks between concurrent copies
     first_mach, second_mach = sorted([src_mach, dst_mach], key=lambda m: m.name)
 
     with first_mach.lock(), second_mach.lock():
@@ -895,6 +899,9 @@ def cmd_delete(arg: Union[str, bool]) -> None:
             subprocess.run(f"rm -Rf {path}", shell=True)
         else:
             error(f"You're not root! You must manually delete installed OSes at {path}")
+
+        if getattr(config, "DHCP_ENABLED", True):
+            DnsmasqManager.reload_or_restart()
 
 
 def cmd_info(arg: Union[str, bool]) -> None:
@@ -1027,7 +1034,6 @@ def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tu
     if mach.os == "NONE/NONE":
         fatal("#!pxe\necho Skipping ipxe. Using next boot option.\nexit 1")
 
-    # Extract clean IP and port
     clean_ip = server_ip
     if ":" in server_ip:
         parts = server_ip.split(":", 1)
@@ -1118,6 +1124,9 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
         val = select_kernel(mach)
 
     mach.set(attr, val)
+
+    if attr in ("ip", "mac") and getattr(config, "DHCP_ENABLED", True):
+        DnsmasqManager.reload_or_restart()
 
 
 def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None) -> None:
@@ -1326,6 +1335,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_bootinfo.add_argument("server_ip", help="Server IP address")
     p_bootinfo.add_argument("port", nargs="?", default=None, help="Server port (optional)")
 
+    # DHCP subcommands
+    p_dhcp = subparsers.add_parser("dhcp", parents=[parent_parser], help="Manage dnsmasq DHCP server", formatter_class=HELP_FORMATTER)
+    dhcp_sub = p_dhcp.add_subparsers(dest="dhcp_action", help="DHCP action", metavar="<action>")
+    dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
+    dhcp_sub.add_parser("leases", parents=[parent_parser], help="Show active DHCP leases", formatter_class=HELP_FORMATTER)
+
     return root_parser
 
 
@@ -1429,6 +1444,30 @@ def main() -> None:
         cmd_ipxe(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
     elif cmd == "bootinfo":
         cmd_bootinfo(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
+    elif cmd == "dhcp":
+        if parsed_args.dhcp_action == "sync":
+            if DnsmasqManager.reload_or_restart():
+                out("dnsmasq synchronized and reloaded successfully.")
+            else:
+                fatal("Failed to sync dnsmasq.")
+        elif parsed_args.dhcp_action == "leases":
+            leases = DnsmasqManager.get_active_leases()
+            if not leases:
+                out("No active DHCP leases found.")
+            else:
+                console = Console()
+                table = Table(
+                    title="Active DHCP Leases",
+                    header_style="bold cyan",
+                    border_style="bright_blue",
+                )
+                table.add_column("MAC Address", style="bold yellow")
+                table.add_column("Assigned IP", style="bold green")
+                for mac, ip in leases.items():
+                    table.add_row(mac, ip)
+                console.print(table)
+        else:
+            parser.parse_args(["dhcp", "--help"])
     else:
         parser.print_help()
         sys.exit(0)
