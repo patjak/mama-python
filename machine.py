@@ -5,6 +5,7 @@ import datetime
 import fcntl
 import os
 import pathlib
+import signal
 import socket
 import subprocess
 import time
@@ -77,6 +78,55 @@ class Machine:
         """Return path to this machine's VM serial console log file."""
         log_dir = pathlib.Path(config.MAMA_PATH) / "log"
         return log_dir / f"{self.name}-vmlog"
+
+    def get_vmpid_path(self) -> pathlib.Path:
+        """Return path to this machine's VM pidfile."""
+        run_mama = pathlib.Path("/run/mama") / f"{self.name}.pid"
+        fallback = pathlib.Path(config.MAMA_PATH) / "run" / f"{self.name}.pid"
+
+        if run_mama.exists():
+            return run_mama
+        if fallback.exists():
+            return fallback
+
+        try:
+            pathlib.Path("/run/mama").mkdir(parents=True, exist_ok=True)
+            return run_mama
+        except OSError:
+            try:
+                (pathlib.Path(config.MAMA_PATH) / "run").mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+            return fallback
+
+    def get_vm_pid(self) -> Optional[int]:
+        """Return active QEMU PID for this machine if running, or None."""
+        pid_file = self.get_vmpid_path()
+        if not pid_file.exists():
+            return None
+
+        try:
+            pid_str = pid_file.read_text(encoding="utf-8").strip()
+            pid = int(pid_str)
+        except (OSError, ValueError):
+            return None
+
+        if pid <= 0:
+            return None
+
+        try:
+            os.kill(pid, 0)
+            return pid
+        except PermissionError:
+            # Process exists but owned by root or another user
+            return pid
+        except (ProcessLookupError, OSError):
+            # Process is not running (stale PID file)
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+            return None
 
     @contextlib.contextmanager
     def lock(self):
@@ -472,6 +522,10 @@ class Machine:
         if vmlog_file.exists():
             table.add_row("VM log", str(vmlog_file))
 
+        vm_pid = self.get_vm_pid()
+        if vm_pid:
+            table.add_row("VM PID", str(vm_pid))
+
         if self.job:
             table.add_row("Running job", self.job)
             if self.job_pid:
@@ -764,41 +818,58 @@ class Machine:
         return ret
 
     def is_vm(self) -> bool:
+        """Check if this machine is configured exclusively as a VM or currently running as a VM."""
         if self.is_only_vm():
             return True
-
-        cmd = f"ps aux | grep qemu | grep {self.mac}"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        lines = [line for line in res.stdout.strip().splitlines() if line]
-        return len(lines) > 1
+        return self.get_vm_pid() is not None
 
     def kill_vm(self) -> Optional[bool]:
-        if not self.is_vm():
+        """Terminate active QEMU VM process using SIGTERM and SIGKILL fallback."""
+        pid = self.get_vm_pid()
+        if not pid:
             return False
 
-        cmd = f"ps ax | grep qemu | grep -v SCREEN | grep {self.mac}"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-        if not lines:
-            return None
-
-        pid = lines[0].split()[0]
         self.debug(f"Killing VM with pid {pid}")
-        subprocess.run(f"sudo kill {pid}", shell=True)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            subprocess.run(f"sudo kill {pid}", shell=True)
+
+        for _ in range(10):
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+            except (ProcessLookupError, OSError):
+                break
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                subprocess.run(f"sudo kill -9 {pid}", shell=True)
+
+        pid_file = self.get_vmpid_path()
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            subprocess.run(f"sudo rm -f {pid_file}", shell=True)
+
         return True
 
     def start_vm(self) -> bool:
         if not Util.is_root():
             self.out("You must be root to start a VM")
 
-        cmd_check = f"ps aux | grep qemu | grep {self.mac}"
-        res = subprocess.run(cmd_check, shell=True, capture_output=True, text=True)
-        lines = [line for line in res.stdout.strip().splitlines() if line]
-        if len(lines) > 1:
+        if self.get_vm_pid() is not None:
             self.error("Failed to start VM. Already running.")
             return False
 
         vmlog_path = self.get_vmlog_path()
+        pid_path = self.get_vmpid_path()
+
         try:
             vmlog_path.parent.mkdir(parents=True, exist_ok=True)
             need_sudo = "" if Util.is_root() else "sudo"
@@ -807,6 +878,11 @@ class Machine:
                 pass
         except Exception as e:
             self.debug(f"Could not prepare vmlog file {vmlog_path}: {e}")
+
+        try:
+            pid_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.debug(f"Could not prepare pidfile directory {pid_path.parent}: {e}")
 
         self._is_started = "1"
         self.set_state("starting-vm")
@@ -860,10 +936,10 @@ class Machine:
         if arch == mama_arch:
             kvm_str = "-enable-kvm"
 
+        need_sudo = "" if Util.is_root() else "sudo "
         cmd = (
-            f"sudo screen -d -m qemu-system-{arch} {sys_str} {kvm_str} {cores_str} {net_str} "
-            f"-nographic -chardev stdio,id=char0,mux=on,logfile={vmlog_path} "
-            f"-serial chardev:char0 -mon chardev=char0 {self.vm_params}"
+            f"{need_sudo}qemu-system-{arch} -daemonize -pidfile {pid_path} {sys_str} {kvm_str} {cores_str} {net_str} "
+            f"-nographic -chardev file,id=char0,path={vmlog_path} -serial chardev:char0 -monitor none {self.vm_params}"
         )
         self.debug(cmd)
         subprocess.run(cmd, shell=True)
