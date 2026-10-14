@@ -65,6 +65,11 @@ class Machine:
         cmd = cmd.replace("$MAMA_HOST", getattr(config, "MAMA_HOST", ""))
         return cmd
 
+    def get_vmlog_path(self) -> pathlib.Path:
+        """Return path to this machine's VM serial console log file."""
+        log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+        return log_dir / f"{self.name}-vmlog"
+
     @contextlib.contextmanager
     def lock(self):
         """Exclusive filesystem lock for mutating machine disk contents."""
@@ -504,6 +509,11 @@ class Machine:
             table.add_row("Boot params", self.boot_params)
         if self.vm_params:
             table.add_row("VM params", self.vm_params)
+
+        vmlog_file = self.get_vmlog_path()
+        if vmlog_file.exists():
+            table.add_row("VM log", str(vmlog_file))
+
         if self.job:
             table.add_row("Running job", self.job)
             if self.job_pid:
@@ -854,6 +864,16 @@ class Machine:
             self.error("Failed to start VM. Already running.")
             return False
 
+        vmlog_path = self.get_vmlog_path()
+        try:
+            vmlog_path.parent.mkdir(parents=True, exist_ok=True)
+            need_sudo = "" if Util.is_root() else "sudo"
+            subprocess.run(f"{need_sudo} touch {vmlog_path} && {need_sudo} chmod 666 {vmlog_path}", shell=True)
+            with open(vmlog_path, "w") as f:
+                pass
+        except Exception as e:
+            self.debug(f"Could not prepare vmlog file {vmlog_path}: {e}")
+
         self._is_started = "1"
         self.set_state("starting-vm")
         MachineRepository.update_fields(self.name, {"_is_started": "1"})
@@ -908,7 +928,8 @@ class Machine:
 
         cmd = (
             f"sudo screen -d -m qemu-system-{arch} {sys_str} {kvm_str} {cores_str} {net_str} "
-            f"-nographic -serial mon:stdio {self.vm_params}"
+            f"-nographic -chardev stdio,id=char0,mux=on,logfile={vmlog_path} "
+            f"-serial chardev:char0 -mon chardev=char0 {self.vm_params}"
         )
         self.debug(cmd)
         subprocess.run(cmd, shell=True)

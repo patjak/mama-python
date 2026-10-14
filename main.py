@@ -95,11 +95,15 @@ def arch_completer(prefix: str, parsed_args: Any, **kwargs: Any) -> List[str]:
 
 def print_usage(argv: List[str]) -> None:
     usage = """Commands:
-list [--fast]                                   - list configured machines (--fast skips power data)
+list [--fast]                                   - list configured machines (--fast skips probing)
 list-os [machine]                               - list available OSes
 list-kernel [machine]                           - list available kernels
 list-resources                                  - list all resources and what is using them
 log [machine]                                   - print log file
+tail [machine]                                  - tail log file
+clear-log [machine]                             - clear the log for machine
+vmlog [machine] [-f]                            - print VM serial console output (-f to follow)
+tail-vmlog [machine]                            - follow VM serial console output in real time
 history [machine]                               - list recorded start/stop durations and timestamps
 job <job> prepare <arch> <os> [worker]          - Execute prepare part of job for arch and os
   [--args=] - Additional arguments to pass along
@@ -119,8 +123,6 @@ copy-os <src-mach> <arch> <os> <dst-mach>       - copy an os from one machine to
 new                                             - add a new machine
 delete [machine]                                - delete existing machine
 info [machine]                                  - show machine detailed info
-log [machine]                                   - show machine log
-clear-log [machine]                             - clear the log for machine
 start [machine]                                 - boot machine
 start-vm [machine]                              - boot virtual instance of machine
 stop [machine]                                  - triggers power button
@@ -351,7 +353,6 @@ def cmd_list(fast: bool = False) -> None:
 
     def fetch_mach_info(mach: Machine) -> dict:
         if fast:
-            # Clear any legacy stale IP on stopped machines
             if not mach.is_started() and mach.ip:
                 mach.set_ip("")
 
@@ -385,7 +386,6 @@ def cmd_list(fast: bool = False) -> None:
                 "job_str": job_str,
             }
 
-        # Standard mode: query network and ping
         ip = mach.get_ip() or "-"
         status = mach.get_status()
 
@@ -802,7 +802,7 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
 
         res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
         if res.returncode != 0:
-            fatal(f"Failed to remove old version of os: {target}")
+            fatal("Failed to remove old version of os: {target}")
 
         res = subprocess.run(f"{need_sudo} mkdir -p {pathlib.Path(config.MAMA_PATH) / 'os' / arch}", shell=True)
         if res.returncode != 0:
@@ -977,10 +977,27 @@ def cmd_tail(arg: Union[str, bool]) -> None:
 def cmd_clear_log(arg: Union[str, bool]) -> None:
     arg_name = str(arg) if isinstance(arg, str) else "mama-log"
     log_file = pathlib.Path(config.MAMA_PATH) / "log" / arg_name
+    vmlog_file = pathlib.Path(config.MAMA_PATH) / "log" / f"{arg_name}-vmlog"
+    cleared = False
     if log_file.exists():
         subprocess.run(f"rm {log_file}", shell=True)
-    else:
+        cleared = True
+    if vmlog_file.exists():
+        subprocess.run(f"rm {vmlog_file}", shell=True)
+        cleared = True
+    if not cleared:
         error(f"No log for {arg_name} exists")
+
+
+def cmd_vmlog(arg: Union[str, bool], follow: bool = False) -> None:
+    mach = select_machine(arg)
+    if isinstance(mach, Machine):
+        log_file = mach.get_vmlog_path()
+        if log_file.exists():
+            cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
+            subprocess.run(cmd, shell=True)
+        else:
+            error(f"No VM log for {mach.name} exists at {log_file}")
 
 
 def cmd_start(arg: Union[str, bool]) -> None:
@@ -1245,6 +1262,15 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_clear_log_mach = p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_clear_log_mach.completer = machine_completer
 
+    p_vmlog = subparsers.add_parser("vmlog", parents=[parent_parser], help="Print VM serial console log", formatter_class=HELP_FORMATTER)
+    p_vmlog_mach = p_vmlog.add_argument("machine", nargs="?", default=False, help="Target machine")
+    p_vmlog_mach.completer = machine_completer
+    p_vmlog.add_argument("-f", "--follow", dest="follow", action="store_true", help="Follow VM log in real time (tail -f)")
+
+    p_tail_vmlog = subparsers.add_parser("tail-vmlog", parents=[parent_parser], help="Follow VM serial log in real time", formatter_class=HELP_FORMATTER)
+    p_tail_vmlog_mach = p_tail_vmlog.add_argument("machine", nargs="?", default=False, help="Target machine")
+    p_tail_vmlog_mach.completer = machine_completer
+
     p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show start/stop timing history and logs", formatter_class=HELP_FORMATTER)
     p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_hist_mach.completer = machine_completer
@@ -1462,6 +1488,10 @@ def main() -> None:
         cmd_tail(parsed_args.machine)
     elif cmd == "clear-log":
         cmd_clear_log(parsed_args.machine)
+    elif cmd == "vmlog":
+        cmd_vmlog(parsed_args.machine, follow=getattr(parsed_args, "follow", False))
+    elif cmd == "tail-vmlog":
+        cmd_vmlog(parsed_args.machine, follow=True)
     elif cmd == "start":
         cmd_start(parsed_args.machine)
     elif cmd == "start-vm":
