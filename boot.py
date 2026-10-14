@@ -3,7 +3,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import pathlib
 import shutil
-import subprocess
 import sys
 import urllib.parse
 
@@ -47,14 +46,16 @@ def get_mac_from_ip(client_ip: str) -> str:
 
     # 3. Fallback to neighbor ARP table
     try:
-        cmd = f"ip -4 neigh | grep {client_ip}"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            first_line = res.stdout.strip().splitlines()[0]
-            parts = [p for p in first_line.split() if p]
-            if len(parts) >= 5:
-                return clean_mac(parts[4])
-    except Exception:
+        with open("/proc/net/arp", "r", encoding="utf-8") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if (
+                    len(parts) >= 4
+                    and parts[0] == client_ip
+                    and parts[3] != "00:00:00:00:00:00"
+                ):
+                    return clean_mac(parts[3])
+    except OSError:
         pass
     return ""
 

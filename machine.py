@@ -5,6 +5,7 @@ import datetime
 import fcntl
 import os
 import pathlib
+import socket
 import subprocess
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -286,19 +287,25 @@ class Machine:
             return None
 
     def get_ip_from_mac(self) -> Optional[str]:
-        """Resolve IP address from neighbor ARP table if the machine is started."""
+        """Resolve IP address directly from /proc/net/arp if the machine is started."""
         if not self.is_started():
             return None
 
-        cmd = f'ip -4 neighbor | grep "{self.mac}"'
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if res.returncode == 0:
-            for line in res.stdout.strip().splitlines():
-                parts = [p for p in line.split() if p]
-                if len(parts) >= 6:
-                    ip, state = parts[0], parts[5]
-                    if state == "REACHABLE" and Util.is_valid_ip(ip):
-                        return ip
+        target_mac = self.mac.lower()
+        try:
+            with open("/proc/net/arp", "r", encoding="utf-8") as f:
+                for line in f.readlines()[1:]:
+                    parts = line.split()
+                    if (
+                        len(parts) >= 4
+                        and parts[3].lower() == target_mac
+                        and parts[3] != "00:00:00:00:00:00"
+                    ):
+                        ip = parts[0]
+                        if Util.is_valid_ip(ip):
+                            return ip
+        except OSError:
+            pass
         return None
 
     def get_ip(self) -> Optional[str]:
@@ -353,13 +360,16 @@ class Machine:
         return "-"
 
     def get_ssh_status(self) -> str:
+        """Test SSH connectivity using a standard non-blocking TCP socket check."""
         ip = self.get_ip()
         if not ip:
             return "closed"
 
-        cmd = f"nc -w 5 -z {ip} 22 2> /dev/null"
-        res = subprocess.run(cmd, shell=True)
-        return "open" if res.returncode == 0 else "closed"
+        try:
+            with socket.create_connection((ip, 22), timeout=3):
+                return "open"
+        except OSError:
+            return "closed"
 
     def is_started(self) -> bool:
         return str(self._is_started) in ("1", "True", "true")
@@ -1032,27 +1042,24 @@ class Machine:
         MachineRepository.update_fields(self.name, {"reservation": user})
 
     def get_kernels(self) -> Dict[str, str]:
-        path = self.get_kernel_path()
-        cmd = f"find {path} -maxdepth 1 2> /dev/null | grep initrd-"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        rows = [r.strip() for r in res.stdout.splitlines() if r.strip()]
+        """Discover available kernels and extract modification times natively using pathlib."""
+        path = pathlib.Path(self.get_kernel_path())
+        if not path.is_dir():
+            return {}
 
         kernels: Dict[str, str] = {}
-        for row in rows:
-            if not row.startswith(path):
-                continue
-            filename = row[len(path):]
-            if not filename.startswith("initrd-"):
-                continue
-            kernel = filename[len("initrd-"):]
-            if kernel == "mama":
-                continue
-
-            stat_res = subprocess.run(f"stat -c %Y {row}", shell=True, capture_output=True, text=True)
-            if stat_res.returncode == 0 and stat_res.stdout.strip():
-                epoch = int(stat_res.stdout.strip())
-                dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+        try:
+            for item in path.glob("initrd-*"):
+                if not item.is_file():
+                    continue
+                kernel = item.name[len("initrd-") :]
+                if kernel == "mama":
+                    continue
+                mtime = item.stat().st_mtime
+                dt = datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
                 kernels[kernel] = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            pass
 
         return dict(sorted(kernels.items(), key=lambda item: item[1]))
 

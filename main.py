@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import getpass
 import os
 import pathlib
 import subprocess
@@ -890,10 +891,22 @@ def cmd_connect(arg: Union[str, bool]) -> None:
     mach = select_machine(arg)
     if isinstance(mach, Machine):
         ip = mach.get_ip()
-        subprocess.run(
-            f'ssh -o "UserKnownHostsFile=/dev/null" -o "StrictHostKeyChecking=no" root@{ip}',
-            shell=True,
-        )
+        if not ip:
+            error(f"Cannot connect: Machine '{mach.name}' has no active IP address.")
+            return
+
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "StrictHostKeyChecking=no",
+            f"root@{ip}",
+        ]
+        try:
+            os.execvp("ssh", ssh_cmd)
+        except OSError as e:
+            fatal(f"Failed to execute ssh: {e}")
 
 
 def cmd_reserve(arg: Union[str, bool]) -> None:
@@ -902,7 +915,7 @@ def cmd_reserve(arg: Union[str, bool]) -> None:
         if mach.reservation:
             fatal(f"Machine is already reserved by: {mach.reservation}")
 
-        user = subprocess.check_output("whoami", shell=True, text=True).strip()
+        user = getpass.getuser()
         mach.reserve(user)
 
 
@@ -913,7 +926,7 @@ def cmd_release(arg: Union[str, bool, None] = False, force: bool = False) -> Non
             fatal("Machine is not reserved")
 
         if not force:
-            user = subprocess.check_output("whoami", shell=True, text=True).strip()
+            user = getpass.getuser()
             if mach.reservation != user:
                 fatal(
                     "Failed to release machine. You do not hold the reservation. "
