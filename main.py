@@ -95,7 +95,7 @@ def arch_completer(prefix: str, parsed_args: Any, **kwargs: Any) -> List[str]:
 
 def print_usage(argv: List[str]) -> None:
     usage = """Commands:
-list                                            - list configured machines
+list [--fast]                                   - list configured machines (--fast skips power data)
 list-os [machine]                               - list available OSes
 list-kernel [machine]                           - list available kernels
 list-resources                                  - list all resources and what is using them
@@ -328,7 +328,7 @@ def select_kernel(mach: Machine) -> str:
     return kernel_str
 
 
-def cmd_list() -> None:
+def cmd_list(fast: bool = False) -> None:
     console = Console()
     table = Table(
         title="Configured Machines",
@@ -350,6 +350,42 @@ def cmd_list() -> None:
     machs = Machine.get_all()
 
     def fetch_mach_info(mach: Machine) -> dict:
+        if fast:
+            # Clear any legacy stale IP on stopped machines
+            if not mach.is_started() and mach.ip:
+                mach.set_ip("")
+
+            ip = mach.ip if mach.is_started() else "-"
+
+            if not mach.is_started():
+                status_str = "[dim red]offline[/dim red]"
+            elif mach.state == "online":
+                status_str = "[bold green]online[/bold green]"
+            elif mach.state:
+                status_str = f"[bold yellow]{mach.state}[/bold yellow]"
+            else:
+                status_str = "[bold yellow]booting[/bold yellow]"
+
+            started_str = "[green]Yes[/green]" if mach.is_started() else "[dim]-[/dim]"
+            vm_str = "[cyan]Yes[/cyan]" if mach.is_only_vm() else "[dim]-[/dim]"
+
+            job_str = mach.job or "-"
+            if mach.job and mach.is_job_stale():
+                job_str = f"{mach.job} [bold red][STALE][/bold red]"
+
+            return {
+                "name": mach.name,
+                "ip": ip or "-",
+                "mac": mach.mac,
+                "status_str": status_str,
+                "state_str": mach.state or "offline",
+                "started_str": started_str,
+                "power": "-",
+                "vm_str": vm_str,
+                "job_str": job_str,
+            }
+
+        # Standard mode: query network and ping
         ip = mach.get_ip() or "-"
         status = mach.get_status()
 
@@ -367,6 +403,8 @@ def cmd_list() -> None:
         if mach.job and mach.is_job_stale():
             job_str = f"{mach.job} [bold red][STALE][/bold red]"
 
+        power = mach.get_power()
+
         return {
             "name": mach.name,
             "ip": ip,
@@ -374,14 +412,17 @@ def cmd_list() -> None:
             "status_str": status_str,
             "state_str": mach.state or "-",
             "started_str": started_str,
-            "power": mach.get_power(),
+            "power": power,
             "vm_str": vm_str,
             "job_str": job_str,
         }
 
-    max_workers = min(32, len(machs)) if machs else 1
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        results = list(executor.map(fetch_mach_info, machs))
+    if fast:
+        results = [fetch_mach_info(m) for m in machs]
+    else:
+        max_workers = min(32, len(machs)) if machs else 1
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(fetch_mach_info, machs))
 
     for i, data in enumerate(results, start=1):
         table.add_row(
@@ -1179,7 +1220,8 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     )
     subparsers = root_parser.add_subparsers(dest="command", help="Available commands", metavar="<command>")
 
-    subparsers.add_parser("list", parents=[parent_parser], help="List configured machines", formatter_class=HELP_FORMATTER)
+    p_list = subparsers.add_parser("list", parents=[parent_parser], help="List configured machines", formatter_class=HELP_FORMATTER)
+    p_list.add_argument("--fast", action="store_true", help="Skip querying power data for faster refresh")
 
     p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes", formatter_class=HELP_FORMATTER)
     p_list_os_mach = p_list_os.add_argument("machine", nargs="?", default=False, help="Target machine")
@@ -1382,7 +1424,7 @@ def main() -> None:
     cmd = parsed_args.command
 
     if cmd == "list":
-        cmd_list()
+        cmd_list(fast=getattr(parsed_args, "fast", False))
     elif cmd == "list-os":
         cmd_list_os(parsed_args.machine)
     elif cmd == "list-kernel":

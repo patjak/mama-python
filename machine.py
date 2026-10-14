@@ -289,11 +289,11 @@ class Machine:
         fatal("Failed to load machine")
 
     def clear(self) -> None:
-        """Atomically clear IP, started status, state, and boot_params in DB."""
+        """Atomically clear IP, started status, and state in DB."""
         self.ip = ""
         self._is_started = "0"
-        self.state = ""
-        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0", "state": ""})
+        self.state = "offline"
+        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0", "state": "offline"})
         self.debug("cleared machine state")
 
     def clear_job(self) -> None:
@@ -304,7 +304,9 @@ class Machine:
         self.debug("cleared job")
 
     def get_ip_from_leases(self) -> Optional[str]:
-        """Resolve IP address from active dnsmasq DHCP leases."""
+        """Resolve IP address from active dnsmasq DHCP leases if the machine is started."""
+        if not self.is_started():
+            return None
         if not getattr(config, "DHCP_ENABLED", True):
             return None
         try:
@@ -315,6 +317,7 @@ class Machine:
             return None
 
     def get_ip_from_mac(self) -> Optional[str]:
+        """Resolve IP address from neighbor ARP table if the machine is started."""
         if not self.is_started():
             return None
 
@@ -330,6 +333,12 @@ class Machine:
         return None
 
     def get_ip(self) -> Optional[str]:
+        # Stopped machines must have no IP
+        if not self.is_started():
+            if self.ip:
+                self.set_ip("")
+            return None
+
         # 1. Check active dnsmasq DHCP leases
         ip = self.get_ip_from_leases()
 
@@ -350,9 +359,8 @@ class Machine:
         return ip
 
     def set_ip(self, ip: str) -> None:
-        if Util.is_valid_ip(ip) or ip == "":
-            self.ip = ip
-            MachineRepository.update_fields(self.name, {"ip": ip})
+        self.ip = ip
+        MachineRepository.update_fields(self.name, {"ip": ip})
 
     def get_power(self) -> str:
         """Execute powercmd to query current power usage in Watts."""
@@ -391,6 +399,12 @@ class Machine:
         return str(self.only_vm) in ("1", "True", "true")
 
     def get_status(self) -> str:
+        # Non-started machines are immediately offline
+        if not self.is_started():
+            if self.ip:
+                self.set_ip("")
+            return "offline"
+
         ip = self.get_ip()
         if not ip:
             self.set_ip("")
@@ -421,8 +435,13 @@ class Machine:
         if pid <= 0:
             return True
 
-        res = subprocess.run(f"ps -p {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return res.returncode != 0
+        try:
+            os.kill(pid, 0)
+            return False
+        except PermissionError:
+            return False
+        except (ProcessLookupError, OSError):
+            return True
 
     def detect_and_clear_stale_job(self) -> bool:
         if self.is_job_stale():
@@ -921,7 +940,9 @@ class Machine:
         return ret
 
     def stop(self, force: bool = False) -> bool:
-        if not self.is_started() and self.get_status() == "offline" and not force:
+        # If already not running, ensure state and IP are completely cleared
+        if not self.is_started() and not force:
+            self.clear()
             return True
 
         self.out("Stopping machine")
@@ -962,7 +983,6 @@ class Machine:
         if self.is_vm():
             self.kill_vm()
 
-        self.set_state("offline")
         self.clear()
         return True
 

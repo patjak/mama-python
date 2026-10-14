@@ -193,7 +193,6 @@ class DnsmasqManager:
         if not cls.test_syntax():
             return False
 
-        # dnsmasq requires a full restart (not SIGHUP/reload) to re-read files in /etc/dnsmasq.d/
         res = subprocess.run("systemctl restart dnsmasq", shell=True)
         if res.returncode == 0:
             out("[DHCP] Restarted dnsmasq service.")
@@ -229,7 +228,7 @@ class DnsmasqManager:
 
     @classmethod
     def sync_leases_to_db(cls) -> None:
-        """Update any machines lacking an IP in SQLite using active lease data and record DHCP state."""
+        """Update any started machines lacking an IP in SQLite using active lease data."""
         leases = cls.get_active_leases()
         if not leases:
             return
@@ -237,7 +236,10 @@ class DnsmasqManager:
         for m_data in MachineRepository.get_all():
             mac = m_data.get("mac", "").lower()
             current_ip = m_data.get("ip", "")
-            if mac in leases and not current_ip:
+            is_started = str(m_data.get("_is_started") or m_data.get("is_started", "0")) in ("1", "True", "true")
+
+            # Only auto-assign lease IP if the machine is actively marked as started
+            if mac in leases and not current_ip and is_started:
                 assigned_ip = leases[mac]
                 MachineRepository.update_fields(
                     m_data["name"],
