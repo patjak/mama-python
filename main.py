@@ -802,48 +802,56 @@ def cmd_info(arg: Union[str, bool]) -> None:
         mach.print_info()
 
 
-def cmd_log(arg: Union[str, bool]) -> None:
-    arg_name = str(arg) if isinstance(arg, str) else "mama-log"
-    log_file = pathlib.Path(config.MAMA_PATH) / "log" / arg_name
-    if log_file.exists():
-        subprocess.run(f"cat {log_file}", shell=True)
-    else:
-        error(f"No log for {arg_name} exists")
-
-
-def cmd_tail(arg: Union[str, bool]) -> None:
-    arg_name = str(arg) if isinstance(arg, str) else "mama-log"
-    log_file = pathlib.Path(config.MAMA_PATH) / "log" / arg_name
-    if log_file.exists():
-        subprocess.run(f"tail -f {log_file}", shell=True)
-    else:
-        error(f"No log for {arg_name} exists")
-
-
-def cmd_clear_log(arg: Union[str, bool]) -> None:
-    arg_name = str(arg) if isinstance(arg, str) else "mama-log"
-    log_file = pathlib.Path(config.MAMA_PATH) / "log" / arg_name
-    vmlog_file = pathlib.Path(config.MAMA_PATH) / "log" / f"{arg_name}-vmlog"
-    cleared = False
-    if log_file.exists():
-        subprocess.run(f"rm {log_file}", shell=True)
-        cleared = True
-    if vmlog_file.exists():
-        subprocess.run(f"rm {vmlog_file}", shell=True)
-        cleared = True
-    if not cleared:
-        error(f"No log for {arg_name} exists")
-
-
-def cmd_vmlog(arg: Union[str, bool], follow: bool = False) -> None:
-    mach = select_machine(arg)
-    if isinstance(mach, Machine):
+def cmd_log(
+    arg: Union[str, bool, None] = False,
+    vm: bool = False,
+    follow: bool = False,
+    clear: bool = False,
+) -> None:
+    if vm:
+        mach = select_machine(arg)
+        if not isinstance(mach, Machine):
+            return
         log_file = mach.get_vmlog_path()
-        if log_file.exists():
-            cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
-            subprocess.run(cmd, shell=True)
-        else:
+        if clear:
+            if log_file.exists():
+                log_file.unlink()
+                out(f"Cleared VM log for {mach.name}")
+            else:
+                error(f"No VM log for {mach.name} exists at {log_file}")
+            return
+
+        if not log_file.exists():
             error(f"No VM log for {mach.name} exists at {log_file}")
+            return
+
+        cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
+        subprocess.run(cmd, shell=True)
+    else:
+        arg_name = str(arg) if isinstance(arg, str) and arg else "mama-log"
+        log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+        log_file = log_dir / arg_name
+        if clear:
+            vmlog_file = log_dir / f"{arg_name}-vmlog"
+            cleared = False
+            if log_file.exists():
+                log_file.unlink()
+                cleared = True
+            if vmlog_file.exists():
+                vmlog_file.unlink()
+                cleared = True
+            if cleared:
+                out(f"Cleared log for {arg_name}")
+            else:
+                error(f"No log for {arg_name} exists")
+            return
+
+        if not log_file.exists():
+            error(f"No log for {arg_name} exists at {log_file}")
+            return
+
+        cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
+        subprocess.run(cmd, shell=True)
 
 
 def cmd_start(arg: Union[str, bool]) -> None:
@@ -898,26 +906,22 @@ def cmd_reserve(arg: Union[str, bool]) -> None:
         mach.reserve(user)
 
 
-def cmd_release(arg: Union[str, bool]) -> None:
+def cmd_release(arg: Union[str, bool, None] = False, force: bool = False) -> None:
     mach = select_machine(arg)
     if isinstance(mach, Machine):
-        if not mach.reservation:
+        if not mach.reservation and not force:
             fatal("Machine is not reserved")
 
-        user = subprocess.check_output("whoami", shell=True, text=True).strip()
-        if mach.reservation != user:
-            fatal(
-                "Failed to release machine. You do not hold the reservation. "
-                "Use the command release-forced to force release the machine."
-            )
+        if not force:
+            user = subprocess.check_output("whoami", shell=True, text=True).strip()
+            if mach.reservation != user:
+                fatal(
+                    "Failed to release machine. You do not hold the reservation. "
+                    "Use `mama release <machine> --force` to force release."
+                )
 
         mach.reserve("")
-
-
-def cmd_release_forced(arg: Union[str, bool]) -> None:
-    mach = select_machine(arg)
-    if isinstance(mach, Machine):
-        mach.reserve("")
+        out(f"Released reservation for machine '{mach.name}'.")
 
 
 def cmd_wait(arg: Union[str, bool]) -> None:
@@ -1080,26 +1084,13 @@ def setup_cli_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources", formatter_class=HELP_FORMATTER)
 
-    p_log = subparsers.add_parser("log", parents=[parent_parser], help="Print log file", formatter_class=HELP_FORMATTER)
-    p_log_mach = p_log.add_argument("machine", nargs="?", default=False, help="Target machine")
+    # Consolidated Log Subcommand
+    p_log = subparsers.add_parser("log", parents=[parent_parser], help="View, follow, or clear logs", formatter_class=HELP_FORMATTER)
+    p_log_mach = p_log.add_argument("machine", nargs="?", default=False, help="Target machine (defaults to mama-log)")
     p_log_mach.completer = machine_completer
-
-    p_tail = subparsers.add_parser("tail", parents=[parent_parser], help="Tail log file", formatter_class=HELP_FORMATTER)
-    p_tail_mach = p_tail.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_tail_mach.completer = machine_completer
-
-    p_clear_log = subparsers.add_parser("clear-log", parents=[parent_parser], help="Clear log for machine", formatter_class=HELP_FORMATTER)
-    p_clear_log_mach = p_clear_log.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_clear_log_mach.completer = machine_completer
-
-    p_vmlog = subparsers.add_parser("vmlog", parents=[parent_parser], help="Print VM serial console log", formatter_class=HELP_FORMATTER)
-    p_vmlog_mach = p_vmlog.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_vmlog_mach.completer = machine_completer
-    p_vmlog.add_argument("-f", "--follow", dest="follow", action="store_true", help="Follow VM log in real time (tail -f)")
-
-    p_tail_vmlog = subparsers.add_parser("tail-vmlog", parents=[parent_parser], help="Follow VM serial log in real time", formatter_class=HELP_FORMATTER)
-    p_tail_vmlog_mach = p_tail_vmlog.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_tail_vmlog_mach.completer = machine_completer
+    p_log.add_argument("-f", "--follow", action="store_true", help="Follow log in real time (tail -f)")
+    p_log.add_argument("--vm", action="store_true", help="Inspect VM serial console log")
+    p_log.add_argument("--clear", action="store_true", help="Clear the log file(s)")
 
     p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show start/stop timing history and logs", formatter_class=HELP_FORMATTER)
     p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
@@ -1213,13 +1204,11 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_res_mach = p_res.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_res_mach.completer = machine_completer
 
+    # Consolidated Release Subcommand
     p_rel = subparsers.add_parser("release", parents=[parent_parser], help="Release machine reservation", formatter_class=HELP_FORMATTER)
     p_rel_mach = p_rel.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_rel_mach.completer = machine_completer
-
-    p_rel_f = subparsers.add_parser("release-forced", parents=[parent_parser], help="Force release machine reservation", formatter_class=HELP_FORMATTER)
-    p_rel_f_mach = p_rel_f.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_rel_f_mach.completer = machine_completer
+    p_rel.add_argument("-f", "--force", action="store_true", help="Force release machine even if reserved by another user")
 
     p_wait = subparsers.add_parser("wait", parents=[parent_parser], help="Wait for machine availability", formatter_class=HELP_FORMATTER)
     p_wait_mach = p_wait.add_argument("machine", nargs="?", default=False, help="Target machine")
@@ -1323,15 +1312,12 @@ def main() -> None:
     elif cmd == "info":
         cmd_info(parsed_args.machine)
     elif cmd == "log":
-        cmd_log(parsed_args.machine)
-    elif cmd == "tail":
-        cmd_tail(parsed_args.machine)
-    elif cmd == "clear-log":
-        cmd_clear_log(parsed_args.machine)
-    elif cmd == "vmlog":
-        cmd_vmlog(parsed_args.machine, follow=getattr(parsed_args, "follow", False))
-    elif cmd == "tail-vmlog":
-        cmd_vmlog(parsed_args.machine, follow=True)
+        cmd_log(
+            parsed_args.machine,
+            vm=parsed_args.vm,
+            follow=parsed_args.follow,
+            clear=parsed_args.clear,
+        )
     elif cmd == "start":
         cmd_start(parsed_args.machine)
     elif cmd == "start-vm":
@@ -1349,9 +1335,7 @@ def main() -> None:
     elif cmd == "reserve":
         cmd_reserve(parsed_args.machine)
     elif cmd == "release":
-        cmd_release(parsed_args.machine)
-    elif cmd == "release-forced":
-        cmd_release_forced(parsed_args.machine)
+        cmd_release(parsed_args.machine, force=parsed_args.force)
     elif cmd == "wait":
         cmd_wait(parsed_args.machine)
     elif cmd == "serve":
