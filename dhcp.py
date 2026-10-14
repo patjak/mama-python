@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Set
 
 import config
 from logger import debug, error, fatal, out
+from machine import to_bool
 from repository import MachineRepository
 
 
@@ -242,7 +243,8 @@ class DnsmasqManager:
         for m_data in MachineRepository.get_all():
             mac = m_data.get("mac", "").lower()
             current_ip = m_data.get("ip", "")
-            is_started = str(m_data.get("_is_started") or m_data.get("is_started", "0")) in ("1", "True", "true")
+            raw_started = m_data.get("is_started") if "is_started" in m_data else m_data.get("_is_started", False)
+            is_started = to_bool(raw_started)
 
             # Only auto-assign lease IP if the machine is actively marked as started
             if mac in leases and not current_ip and is_started:

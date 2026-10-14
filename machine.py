@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import asdict, dataclass, fields
 import datetime
 import fcntl
 import os
@@ -9,7 +10,7 @@ import signal
 import socket
 import subprocess
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
 
 import questionary
 from rich.console import Console
@@ -22,15 +23,25 @@ from repository import MachineRepository
 from util import Util
 
 
+def to_bool(val: Any) -> bool:
+    """Normalize SQLite/configuration booleans into native Python bool."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass
 class Machine:
     # Class tunables for machine management
-    start_timeout_default: int = 4 * 60
-    stop_timeout_default: int = 30
-    ssh_cmd_timeout: int = 1 * 60
-    power_cycle_delay: int = 30
-    resource_wait_timeout: int = 20 * 60 * 60
+    start_timeout_default: ClassVar[int] = 4 * 60
+    stop_timeout_default: ClassVar[int] = 30
+    ssh_cmd_timeout: ClassVar[int] = 1 * 60
+    power_cycle_delay: ClassVar[int] = 30
+    resource_wait_timeout: ClassVar[int] = 20 * 60 * 60
 
-    SETTABLE_FIELDS: Dict[str, Tuple[str, str, str]] = {
+    SETTABLE_FIELDS: ClassVar[Dict[str, Tuple[str, str, str]]] = {
         "resources": ("resources", "Enter new resources (space separated):", "resources"),
         "params": ("boot parameters", "Enter new boot parameters:", "boot_params"),
         "vmparams": ("VM parameters", "Enter new VM parameters:", "vm_params"),
@@ -41,29 +52,100 @@ class Machine:
         "start_timeout": ("start-timeout", "Enter new start-timeout (leave empty for default):", "start_timeout"),
         "stop-timeout": ("stop-timeout", "Enter new stop-timeout (leave empty for default):", "stop_timeout"),
         "stop_timeout": ("stop-timeout", "Enter new stop-timeout (leave empty for default):", "stop_timeout"),
+        "only-vm": ("only-vm", "Is this only a virtual machine?", "only_vm"),
+        "only_vm": ("only-vm", "Is this only a virtual machine?", "only_vm"),
     }
 
-    def __init__(self, name: str = "", mac: str = "") -> None:
-        self.name: str = name
-        self.mac: str = mac.lower()
-        self.ip: str = ""
-        self._is_started: str = "0"
-        self.state: str = ""
-        self.arch: str = ""
-        self.os: str = ""
-        self.kernel: str = ""
-        self.reservation: str = ""
-        self.resources: str = ""
-        self.boot_params: str = ""
-        self.vm_params: str = ""
-        self.only_vm: Union[int, str, bool] = 0
-        self.job: str = ""
-        self.job_pid: str = ""
-        self.startcmd: str = ""
-        self.stopcmd: str = ""
-        self.powercmd: str = ""
-        self.start_timeout: int = self.start_timeout_default
-        self.stop_timeout: int = self.stop_timeout_default
+    name: str = ""
+    mac: str = ""
+    ip: str = ""
+    is_started: bool = False
+    state: str = ""
+    arch: str = ""
+    os: str = ""
+    kernel: str = ""
+    reservation: str = ""
+    resources: str = ""
+    boot_params: str = ""
+    vm_params: str = ""
+    only_vm: bool = False
+    job: str = ""
+    job_pid: str = ""
+    startcmd: str = ""
+    stopcmd: str = ""
+    powercmd: str = ""
+    start_timeout: int = 240
+    stop_timeout: int = 30
+
+    def __post_init__(self) -> None:
+        self.mac = self.mac.lower()
+        self.is_started = to_bool(self.is_started)
+        self.only_vm = to_bool(self.only_vm)
+
+    @property
+    def _is_started(self) -> str:
+        """Backward compatibility property for legacy SQLite callers."""
+        return "1" if self.is_started else "0"
+
+    @_is_started.setter
+    def _is_started(self, val: Any) -> None:
+        self.is_started = to_bool(val)
+
+    def is_only_vm(self) -> bool:
+        """Backward compatibility helper for callers expecting a method."""
+        return self.only_vm
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> Machine:
+        """Construct a Machine instance from a SQLite row or dictionary."""
+        raw_started = data.get("is_started") if "is_started" in data else data.get("_is_started", False)
+
+        try:
+            start_tout = int(data.get("start_timeout") or cls.start_timeout_default)
+        except (ValueError, TypeError):
+            start_tout = cls.start_timeout_default
+
+        try:
+            stop_tout = int(data.get("stop_timeout") or cls.stop_timeout_default)
+        except (ValueError, TypeError):
+            stop_tout = cls.stop_timeout_default
+
+        return cls(
+            name=str(data.get("name") or ""),
+            mac=str(data.get("mac") or "").lower(),
+            ip=str(data.get("ip") or ""),
+            is_started=to_bool(raw_started),
+            state=str(data.get("state") or ""),
+            arch=str(data.get("arch") or ""),
+            os=str(data.get("os") or ""),
+            kernel=str(data.get("kernel") or ""),
+            reservation=str(data.get("reservation") or ""),
+            resources=str(data.get("resources") or ""),
+            boot_params=str(data.get("boot_params") or ""),
+            vm_params=str(data.get("vm_params") or ""),
+            only_vm=to_bool(data.get("only_vm", False)),
+            job=str(data.get("job") or ""),
+            job_pid=str(data.get("job_pid") or ""),
+            startcmd=str(data.get("startcmd") or ""),
+            stopcmd=str(data.get("stopcmd") or ""),
+            powercmd=str(data.get("powercmd") or ""),
+            start_timeout=start_tout,
+            stop_timeout=stop_tout,
+        )
+
+    def fill_from_dict(self, data: Dict[str, Any]) -> None:
+        """Update existing Machine instance attributes in-place from a dictionary."""
+        updated = self.from_dict(data)
+        for f in fields(self):
+            setattr(self, f.name, getattr(updated, f.name))
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert machine attributes into dictionary representation for SQLite upserts."""
+        d = asdict(self)
+        d["only_vm"] = 1 if self.only_vm else 0
+        d["is_started"] = 1 if self.is_started else 0
+        d["_is_started"] = 1 if self.is_started else 0
+        return d
 
     def _preprocess_cmd(self, cmd: str) -> str:
         """Substitute parameters into startcmd, stopcmd, and powercmd."""
@@ -106,8 +188,7 @@ class Machine:
             return None
 
         try:
-            pid_str = pid_file.read_text(encoding="utf-8").strip()
-            pid = int(pid_str)
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return None
 
@@ -118,10 +199,8 @@ class Machine:
             os.kill(pid, 0)
             return pid
         except PermissionError:
-            # Process exists but owned by root or another user
             return pid
         except (ProcessLookupError, OSError):
-            # Process is not running (stale PID file)
             try:
                 pid_file.unlink()
             except OSError:
@@ -157,12 +236,8 @@ class Machine:
     @classmethod
     def get_all(cls) -> List[Machine]:
         """Query all machines directly from SQLite."""
-        machs: List[Machine] = []
         rows = MachineRepository.get_all()
-        for row in rows:
-            mach = cls()
-            mach.fill_from_dict(row)
-            machs.append(mach)
+        machs = [cls.from_dict(row) for row in rows]
         machs.sort(key=lambda x: x.name)
         return machs
 
@@ -170,87 +245,13 @@ class Machine:
     def get_by_name(cls, name: str) -> Optional[Machine]:
         """Indexed point-lookup by machine name from SQLite."""
         row = MachineRepository.get_by_name(name)
-        if row:
-            mach = cls()
-            mach.fill_from_dict(row)
-            return mach
-        return None
+        return cls.from_dict(row) if row else None
 
     @classmethod
     def find_by_mac(cls, mac: str) -> Optional[Machine]:
         """Indexed point-lookup by MAC address from SQLite."""
         row = MachineRepository.get_by_mac(mac)
-        if row:
-            mach = cls()
-            mach.fill_from_dict(row)
-            return mach
-        return None
-
-    def fill_from_dict(self, data: Dict[str, Any]) -> None:
-        """Populate Machine attributes from a dictionary or SQLite row."""
-        def get_val(key: str, default: str = "") -> str:
-            val = data.get(key)
-            if val is None and key == "_is_started":
-                val = data.get("is_started")
-            if val is not None:
-                return str(val)
-            return default
-
-        self.name = get_val("name")
-        self.mac = get_val("mac").lower()
-        self.ip = get_val("ip")
-        self._is_started = get_val("_is_started", "0")
-        self.state = get_val("state")
-        self.arch = get_val("arch")
-        self.os = get_val("os")
-        self.kernel = get_val("kernel")
-        self.reservation = get_val("reservation")
-        self.resources = get_val("resources")
-        self.boot_params = get_val("boot_params")
-        self.vm_params = get_val("vm_params")
-        self.only_vm = get_val("only_vm", "0")
-        self.job = get_val("job")
-        self.job_pid = get_val("job_pid")
-        self.startcmd = get_val("startcmd")
-        self.stopcmd = get_val("stopcmd")
-        self.powercmd = get_val("powercmd")
-
-        start_tout = get_val("start_timeout")
-        try:
-            self.start_timeout = int(start_tout) if start_tout and str(start_tout).strip() else self.start_timeout_default
-        except (ValueError, TypeError):
-            self.start_timeout = self.start_timeout_default
-
-        stop_tout = get_val("stop_timeout")
-        try:
-            self.stop_timeout = int(stop_tout) if stop_tout and str(stop_tout).strip() else self.stop_timeout_default
-        except (ValueError, TypeError):
-            self.stop_timeout = self.stop_timeout_default
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert machine attributes into dictionary representation for DB upserts."""
-        return {
-            "name": self.name,
-            "mac": self.mac,
-            "ip": self.ip,
-            "state": self.state,
-            "arch": self.arch,
-            "os": self.os,
-            "kernel": self.kernel,
-            "reservation": self.reservation,
-            "resources": self.resources,
-            "boot_params": self.boot_params,
-            "vm_params": self.vm_params,
-            "only_vm": self.only_vm,
-            "job": self.job,
-            "job_pid": self.job_pid,
-            "startcmd": self.startcmd,
-            "stopcmd": self.stopcmd,
-            "powercmd": self.powercmd,
-            "start_timeout": self.start_timeout,
-            "stop_timeout": self.stop_timeout,
-            "_is_started": self._is_started,
-        }
+        return cls.from_dict(row) if row else None
 
     def set_state(self, state: str) -> None:
         """Record the latest boot sequence state for this machine."""
@@ -295,9 +296,9 @@ class Machine:
     def clear(self) -> None:
         """Atomically clear IP, started status, and state in DB."""
         self.ip = ""
-        self._is_started = "0"
+        self.is_started = False
         self.state = "offline"
-        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": "0", "state": "offline"})
+        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": 0, "state": "offline"})
         self.debug("cleared machine state")
 
     def clear_job(self) -> None:
@@ -309,7 +310,7 @@ class Machine:
 
     def get_ip_from_leases(self) -> Optional[str]:
         """Resolve IP address from active dnsmasq DHCP leases if the machine is started."""
-        if not self.is_started():
+        if not self.is_started:
             return None
         if not getattr(config, "DHCP_ENABLED", True):
             return None
@@ -322,7 +323,7 @@ class Machine:
 
     def get_ip_from_mac(self) -> Optional[str]:
         """Resolve IP address directly from /proc/net/arp if the machine is started."""
-        if not self.is_started():
+        if not self.is_started:
             return None
 
         target_mac = self.mac.lower()
@@ -344,7 +345,7 @@ class Machine:
 
     def get_ip(self) -> Optional[str]:
         # Stopped machines must have no IP
-        if not self.is_started():
+        if not self.is_started:
             if self.ip:
                 self.set_ip("")
             return None
@@ -363,7 +364,7 @@ class Machine:
             if self.ip != ip:
                 self.debug(f"Changing IP {self.ip} -> {ip}")
                 self.set_ip(ip)
-                if self.is_started() and self.state in ("powering-on", "starting-vm", "power-cycling", ""):
+                if self.is_started and self.state in ("powering-on", "starting-vm", "power-cycling", ""):
                     self.set_state("dhcp-bound")
 
         return ip
@@ -405,15 +406,9 @@ class Machine:
         except OSError:
             return "closed"
 
-    def is_started(self) -> bool:
-        return str(self._is_started) in ("1", "True", "true")
-
-    def is_only_vm(self) -> bool:
-        return str(self.only_vm) in ("1", "True", "true")
-
     def get_status(self) -> str:
         # Non-started machines are immediately offline
-        if not self.is_started():
+        if not self.is_started:
             if self.ip:
                 self.set_ip("")
             return "offline"
@@ -489,8 +484,8 @@ class Machine:
         table.add_row("Name", self.name)
         table.add_row("MAC", self.mac)
         table.add_row("IP", ip)
-        table.add_row("Is started", "[green]yes[/green]" if self.is_started() else "[dim]no[/dim]")
-        table.add_row("Is only VM", "[cyan]yes[/cyan]" if self.is_only_vm() else "[dim]no[/dim]")
+        table.add_row("Is started", "[green]yes[/green]" if self.is_started else "[dim]no[/dim]")
+        table.add_row("Is only VM", "[cyan]yes[/cyan]" if self.only_vm else "[dim]no[/dim]")
         table.add_row("OS", self.os or "-")
         table.add_row("Kernel", self.kernel or "-")
         table.add_row("Status", status_str)
@@ -600,31 +595,39 @@ class Machine:
         elif attr == "kernel":
             self._set_kernel(val)
         elif attr in self.SETTABLE_FIELDS:
-            label, prompt_msg, field = self.SETTABLE_FIELDS[attr]
-            curr_val = getattr(self, field, "")
+            label, prompt_msg, field_name = self.SETTABLE_FIELDS[attr]
+            curr_val = getattr(self, field_name, "")
             out(f"Current {label}: {curr_val if curr_val not in ('', None) else '(none)'}")
 
             if val is False or val == "":
-                val = prompt_text(prompt_msg)
+                if field_name == "only_vm":
+                    val = questionary.confirm("Is this only a virtual machine?").ask()
+                else:
+                    val = prompt_text(prompt_msg)
 
-            if field == "boot_params":
+            if field_name == "boot_params":
                 s = str(val).strip()
                 new_val = "" if s.lower() in ("none", "clear", '""', "''") else s
                 self.boot_params = new_val
                 MachineRepository.update_fields(self.name, {"boot_params": new_val})
                 self.out(f"Setting boot parameters to: {new_val if new_val else '(none)'}")
-            elif field in ("start_timeout", "stop_timeout"):
-                default = self.start_timeout_default if field == "start_timeout" else self.stop_timeout_default
+            elif field_name in ("start_timeout", "stop_timeout"):
+                default = self.start_timeout_default if field_name == "start_timeout" else self.stop_timeout_default
                 try:
                     new_val = int(val) if val and str(val).strip() else default
                 except (ValueError, TypeError):
                     new_val = default
-                setattr(self, field, new_val)
-                MachineRepository.update_fields(self.name, {field: new_val})
+                setattr(self, field_name, new_val)
+                MachineRepository.update_fields(self.name, {field_name: new_val})
+            elif field_name == "only_vm":
+                new_bool = to_bool(val)
+                self.only_vm = new_bool
+                MachineRepository.update_fields(self.name, {"only_vm": 1 if new_bool else 0})
+                self.out(f"Setting only_vm to: {'yes' if new_bool else 'no'}")
             else:
                 new_val = str(val)
-                setattr(self, field, new_val)
-                MachineRepository.update_fields(self.name, {field: new_val})
+                setattr(self, field_name, new_val)
+                MachineRepository.update_fields(self.name, {field_name: new_val})
         else:
             self.error(f"Invalid attribute: {attr}")
 
@@ -647,6 +650,8 @@ class Machine:
             "powercmd": lambda: self.powercmd,
             "start_timeout": lambda: self.start_timeout,
             "stop_timeout": lambda: self.stop_timeout,
+            "is_started": lambda: self.is_started,
+            "only_vm": lambda: self.only_vm,
         }
         getter = dispatch.get(attr_norm)
         if getter:
@@ -726,7 +731,7 @@ class Machine:
 
             machs = self.get_all()
             for mach in machs:
-                if not mach.is_started() or mach.name == self.name:
+                if not mach.is_started or mach.name == self.name:
                     continue
                 mach_res = mach.resources.split()
                 for res in resources:
@@ -776,14 +781,14 @@ class Machine:
             time.sleep(self.power_cycle_delay)
             return self.start()
 
-        if self.is_only_vm():
+        if self.only_vm:
             return self.start_vm()
 
         if not self.wait_for_resources():
             return False
 
-        self._is_started = "1"
-        MachineRepository.update_fields(self.name, {"_is_started": "1"})
+        self.is_started = True
+        MachineRepository.update_fields(self.name, {"_is_started": 1})
 
         if status == "offline":
             self.set_state("powering-on")
@@ -819,7 +824,7 @@ class Machine:
 
     def is_vm(self) -> bool:
         """Check if this machine is configured exclusively as a VM or currently running as a VM."""
-        if self.is_only_vm():
+        if self.only_vm:
             return True
         return self.get_vm_pid() is not None
 
@@ -884,9 +889,9 @@ class Machine:
         except Exception as e:
             self.debug(f"Could not prepare pidfile directory {pid_path.parent}: {e}")
 
-        self._is_started = "1"
+        self.is_started = True
         self.set_state("starting-vm")
-        MachineRepository.update_fields(self.name, {"_is_started": "1"})
+        MachineRepository.update_fields(self.name, {"_is_started": 1})
 
         self.out(f"Starting virtual machine with OS {self.os} and kernel {self.kernel}")
 
@@ -972,7 +977,7 @@ class Machine:
 
     def stop(self, force: bool = False) -> bool:
         # If already not running, ensure state and IP are completely cleared
-        if not self.is_started() and not force:
+        if not self.is_started and not force:
             self.clear()
             return True
 
@@ -1049,7 +1054,7 @@ class Machine:
         return self.is_ancestor(ancestor_pid_int, parent_pid)
 
     def is_idle(self) -> bool:
-        if self.is_started():
+        if self.is_started:
             return False
 
         if self.job and not self.is_ancestor(self.job_pid):
@@ -1063,7 +1068,7 @@ class Machine:
     def wait(self) -> None:
         self.load()
         if not self.is_idle():
-            started_str = "yes" if self.is_started() else "no"
+            started_str = "yes" if self.is_started else "no"
             job_str = f", job: {self.job}" if self.job else ""
             pid_str = f", job_pid: {self.job_pid}" if self.job_pid else ""
             self.out(f"Waiting for machine to become idle ( started: {started_str}{job_str}{pid_str})")

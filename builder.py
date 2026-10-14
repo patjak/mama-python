@@ -38,7 +38,7 @@ def build_os(
     mama_arch = subprocess.check_output("uname -p", shell=True, text=True).strip()
     need_sudo = "" if Util.is_root() else "sudo"
 
-    if mama_arch == arch and builder_mach.is_only_vm():
+    if mama_arch == arch and builder_mach.only_vm:
         run_os_build_script(arch, os_name, packages=packages)
     else:
         pkg_arg = f' --args="{packages}"' if packages else ""

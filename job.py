@@ -259,7 +259,7 @@ class Job:
                             if not m.stop():
                                 return False
 
-                            if m.is_only_vm():
+                            if m.only_vm:
                                 if not m.start_vm():
                                     return False
                             else:

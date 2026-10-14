@@ -37,7 +37,7 @@ import config
 from dhcp import DnsmasqManager
 from job import Job
 from logger import Log, debug, error, fatal, out
-from machine import Machine
+from machine import Machine, to_bool
 from os_mgr import Arch, Os
 from repository import MachineRepository, Util
 
@@ -222,12 +222,12 @@ def cmd_list(fast: bool = False) -> None:
 
     def fetch_mach_info(mach: Machine) -> dict:
         if fast:
-            if not mach.is_started() and mach.ip:
+            if not mach.is_started and mach.ip:
                 mach.set_ip("")
 
-            ip = mach.ip if mach.is_started() else "-"
+            ip = mach.ip if mach.is_started else "-"
 
-            if not mach.is_started():
+            if not mach.is_started:
                 status_str = "[dim red]offline[/dim red]"
             elif mach.state == "online":
                 status_str = "[bold green]online[/bold green]"
@@ -236,8 +236,8 @@ def cmd_list(fast: bool = False) -> None:
             else:
                 status_str = "[bold yellow]booting[/bold yellow]"
 
-            started_str = "[green]Yes[/green]" if mach.is_started() else "[dim]-[/dim]"
-            vm_str = "[cyan]Yes[/cyan]" if mach.is_only_vm() else "[dim]-[/dim]"
+            started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
+            vm_str = "[cyan]Yes[/cyan]" if mach.only_vm else "[dim]-[/dim]"
 
             job_str = mach.job or "-"
             if mach.job and mach.is_job_stale():
@@ -265,7 +265,7 @@ def cmd_list(fast: bool = False) -> None:
         else:
             status_str = "[dim red]offline[/dim red]"
 
-        started_str = "[green]Yes[/green]" if mach.is_started() else "[dim]-[/dim]"
+        started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
         vm_str = "[cyan]Yes[/cyan]" if mach.is_vm() else "[dim]-[/dim]"
 
         job_str = mach.job or "-"
@@ -341,16 +341,14 @@ def cmd_new() -> None:
 
     out(f"Arch selected: {arch}\n")
 
-    only_vm_bool = questionary.confirm("Is this only a virtual machine?").ask()
-    only_vm = 1 if only_vm_bool else 0
+    only_vm = bool(questionary.confirm("Is this only a virtual machine?").ask())
 
-    m = Machine()
-    m.name = name
-    m.mac = mac
-    m.arch = str(arch)
-    m.os = ""
-    m.kernel = ""
-    m.only_vm = only_vm
+    m = Machine(
+        name=name,
+        mac=mac,
+        arch=str(arch),
+        only_vm=only_vm,
+    )
 
     if not Util.is_root():
         out("You must be root to run this command")
@@ -417,7 +415,7 @@ def cmd_list_resources() -> None:
             if not res:
                 continue
             entry = f" {mach.name}" if res in resources else mach.name
-            if mach.is_started():
+            if mach.is_started:
                 entry += "*"
             resources[res] = resources.get(res, "") + entry
 
@@ -820,8 +818,7 @@ def cmd_serve() -> None:
 def bootinfo(mac: str, server_ip: str, port: Union[int, str, None] = None) -> Tuple[str, str, str]:
     mach = Machine.find_by_mac(mac)
     if not mach:
-        new_mach = Machine(name=mac, mac=mac)
-        new_mach.only_vm = 0
+        new_mach = Machine(name=mac, mac=mac, only_vm=False)
         MachineRepository.add_machine(new_mach)
         fatal(f"Machine is not configured in Mama! Added as new machine: {mac}")
 
@@ -891,7 +888,7 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
         attrs = [
             "state", "os", "kernel", "resources", "params",
             "vmparams", "startcmd", "stopcmd", "powercmd",
-            "start-timeout", "stop-timeout"
+            "start-timeout", "stop-timeout", "only-vm"
         ]
         attr = questionary.select("Select attribute to set:", choices=attrs).ask()
         if not attr:
@@ -925,7 +922,7 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
         attrs = [
             "state", "status", "os", "params", "resources", "kernel", "reservation",
             "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power",
-            "start-timeout", "stop-timeout"
+            "start-timeout", "stop-timeout", "is_started", "only_vm"
         ]
         attr = questionary.select("Select attribute to get:", choices=attrs).ask()
         if not attr:
