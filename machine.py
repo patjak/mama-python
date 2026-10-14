@@ -7,7 +7,7 @@ import os
 import pathlib
 import subprocess
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import questionary
 from rich.console import Console
@@ -27,6 +27,19 @@ class Machine:
     ssh_cmd_timeout: int = 1 * 60
     power_cycle_delay: int = 30
     resource_wait_timeout: int = 20 * 60 * 60
+
+    SETTABLE_FIELDS: Dict[str, Tuple[str, str, str]] = {
+        "resources": ("resources", "Enter new resources (space separated):", "resources"),
+        "params": ("boot parameters", "Enter new boot parameters:", "boot_params"),
+        "vmparams": ("VM parameters", "Enter new VM parameters:", "vm_params"),
+        "startcmd": ("start command", "Enter new start command:", "startcmd"),
+        "stopcmd": ("stop command", "Enter new stop command:", "stopcmd"),
+        "powercmd": ("power command", "Enter new power command:", "powercmd"),
+        "start-timeout": ("start-timeout", "Enter new start-timeout (leave empty for default):", "start_timeout"),
+        "start_timeout": ("start-timeout", "Enter new start-timeout (leave empty for default):", "start_timeout"),
+        "stop-timeout": ("stop-timeout", "Enter new stop-timeout (leave empty for default):", "stop_timeout"),
+        "stop_timeout": ("stop-timeout", "Enter new stop-timeout (leave empty for default):", "stop_timeout"),
+    }
 
     def __init__(self, name: str = "", mac: str = "") -> None:
         self.name: str = name
@@ -475,6 +488,53 @@ class Machine:
         console.print(table)
         Log.resume()
 
+    def _set_os(self, val: Any) -> None:
+        if isinstance(val, str) and "/" in val:
+            parts = val.split("/", 1)
+            arch, os_name = parts[0], parts[1]
+        else:
+            arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
+            os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
+        os_str = f"{arch}/{os_name}"
+        if Os.is_runnable(arch, os_name, self):
+            self.out(f"Setting OS {os_str}")
+            self.os = os_str
+            self.kernel = ""
+            MachineRepository.update_fields(self.name, {"os": os_str, "kernel": ""})
+            self.set("kernel", "latest")
+        elif os_name == "NONE":
+            self.out("Skipping ipxe. Machine will use next configured boot option.")
+            self.os = "NONE/NONE"
+            self.kernel = ""
+            MachineRepository.update_fields(self.name, {"os": "NONE/NONE", "kernel": ""})
+        else:
+            fatal(f"Invalid OS: {os_str}")
+
+    def _set_kernel(self, val: Any) -> None:
+        kernels = self.get_kernels()
+        val_str = str(val) if val is not None else ""
+        if val_str.lower() == "latest":
+            val_str = ""
+            latest_date = ""
+            for name, date in kernels.items():
+                if date >= latest_date:
+                    latest_date = date
+                    val_str = name
+
+        if val_str in kernels or val_str == "":
+            if not Util.is_root():
+                out("You must be root to run this command")
+
+            initrd = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / self.os / "boot" / f"initrd-{val_str}"
+            if initrd.exists():
+                subprocess.run(f"sudo chmod 644 {initrd}", shell=True)
+
+            self.kernel = val_str
+            MachineRepository.update_fields(self.name, {"kernel": val_str})
+            self.out(f"Setting kernel to {self.kernel}")
+        else:
+            self.error(f"Kernel {val_str} doesn't exist. Aborting.")
+
     def set(self, attr: str, val: Any = "") -> None:
         def prompt_text(prompt_msg: str) -> str:
             res = questionary.text(prompt_msg).ask()
@@ -488,128 +548,62 @@ class Machine:
             self.set_state(val_str)
             self.out(f"Setting state to: {val_str}")
         elif attr == "os":
-            if isinstance(val, str) and "/" in val:
-                parts = val.split("/", 1)
-                arch, os_name = parts[0], parts[1]
-            else:
-                arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
-                os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
-            os_str = f"{arch}/{os_name}"
-            if Os.is_runnable(arch, os_name, self):
-                self.out(f"Setting OS {os_str}")
-                self.os = os_str
-                self.kernel = ""
-                MachineRepository.update_fields(self.name, {"os": os_str, "kernel": ""})
-                self.set("kernel", "latest")
-            elif os_name == "NONE":
-                self.out("Skipping ipxe. Machine will use next configured boot option.")
-                self.os = "NONE/NONE"
-                self.kernel = ""
-                MachineRepository.update_fields(self.name, {"os": "NONE/NONE", "kernel": ""})
-            else:
-                fatal(f"Invalid OS: {os_str}")
+            self._set_os(val)
         elif attr == "kernel":
-            kernels = self.get_kernels()
-            val_str = str(val) if val is not None else ""
-            if val_str.lower() == "latest":
-                val_str = ""
-                latest_date = ""
-                for name, date in kernels.items():
-                    if date >= latest_date:
-                        latest_date = date
-                        val_str = name
+            self._set_kernel(val)
+        elif attr in self.SETTABLE_FIELDS:
+            label, prompt_msg, field = self.SETTABLE_FIELDS[attr]
+            curr_val = getattr(self, field, "")
+            out(f"Current {label}: {curr_val if curr_val not in ('', None) else '(none)'}")
 
-            if val_str in kernels or val_str == "":
-                if not Util.is_root():
-                    out("You must be root to run this command")
+            if val is False or val == "":
+                val = prompt_text(prompt_msg)
 
-                initrd = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / self.os / "boot" / f"initrd-{val_str}"
-                if initrd.exists():
-                    subprocess.run(f"sudo chmod 644 {initrd}", shell=True)
-
-                self.kernel = val_str
-                MachineRepository.update_fields(self.name, {"kernel": val_str})
-                self.out(f"Setting kernel to {self.kernel}")
+            if field == "boot_params":
+                s = str(val).strip()
+                new_val = "" if s.lower() in ("none", "clear", '""', "''") else s
+                self.boot_params = new_val
+                MachineRepository.update_fields(self.name, {"boot_params": new_val})
+                self.out(f"Setting boot parameters to: {new_val if new_val else '(none)'}")
+            elif field in ("start_timeout", "stop_timeout"):
+                default = self.start_timeout_default if field == "start_timeout" else self.stop_timeout_default
+                try:
+                    new_val = int(val) if val and str(val).strip() else default
+                except (ValueError, TypeError):
+                    new_val = default
+                setattr(self, field, new_val)
+                MachineRepository.update_fields(self.name, {field: new_val})
             else:
-                self.error(f"Kernel {val_str} doesn't exist. Aborting.")
-        elif attr == "resources":
-            out(f"Current resources: {self.resources}")
-            if not val:
-                val = prompt_text("Enter new resources (space separated):")
-            self.resources = str(val)
-            MachineRepository.update_fields(self.name, {"resources": str(val)})
-        elif attr == "params":
-            out(f"Current boot parameters: {self.boot_params if self.boot_params else '(none)'}")
-            if val is False:
-                val = prompt_text("Enter new boot parameters:")
-
-            val_str = str(val).strip()
-            if val_str.lower() in ("none", "clear", '""', "''"):
-                val_str = ""
-
-            self.boot_params = val_str
-            MachineRepository.update_fields(self.name, {"boot_params": val_str})
-            self.out(f"Setting boot parameters to: {self.boot_params if self.boot_params else '(none)'}")
-        elif attr == "vmparams":
-            out(f"Current VM parameters: {self.vm_params}")
-            if not val:
-                val = prompt_text("Enter new VM parameters:")
-            self.vm_params = str(val)
-            MachineRepository.update_fields(self.name, {"vm_params": str(val)})
-        elif attr == "startcmd":
-            out(f"Current start command: {self.startcmd}")
-            if not val:
-                val = prompt_text("Enter new start command:")
-            self.startcmd = str(val)
-            MachineRepository.update_fields(self.name, {"startcmd": str(val)})
-        elif attr == "stopcmd":
-            out(f"Current stop command: {self.stopcmd}")
-            if not val:
-                val = prompt_text("Enter new stop command:")
-            self.stopcmd = str(val)
-            MachineRepository.update_fields(self.name, {"stopcmd": str(val)})
-        elif attr == "powercmd":
-            out(f"Current power command: {self.powercmd}")
-            if not val:
-                val = prompt_text("Enter new power command:")
-            self.powercmd = str(val)
-            MachineRepository.update_fields(self.name, {"powercmd": str(val)})
-        elif attr == "start-timeout":
-            if not val:
-                out(f"Current start-timeout: {self.start_timeout}")
-                val = prompt_text("Enter new start-timeout (leave empty for default):")
-            tout = int(val) if val else self.start_timeout_default
-            self.start_timeout = tout
-            MachineRepository.update_fields(self.name, {"start_timeout": tout})
-        elif attr in ("stop-timeout", "stop_timeout"):
-            if not val:
-                out(f"Current stop-timeout: {self.stop_timeout}")
-                val = prompt_text("Enter new stop-timeout (leave empty for default):")
-            tout = int(val) if val else self.stop_timeout_default
-            self.stop_timeout = tout
-            MachineRepository.update_fields(self.name, {"stop_timeout": tout})
+                new_val = str(val)
+                setattr(self, field, new_val)
+                MachineRepository.update_fields(self.name, {field: new_val})
+        else:
+            self.error(f"Invalid attribute: {attr}")
 
     def get(self, attr: str) -> Any:
-        mapping = {
-            "state": self.state,
-            "status": self.get_status(),
-            "params": self.boot_params,
-            "vmparams": self.vm_params,
-            "os": self.os,
-            "kernel": self.kernel,
-            "resources": self.resources,
-            "reservation": self.reservation,
-            "ip": self.get_ip(),
-            "mac": self.mac,
-            "startcmd": self.startcmd,
-            "stopcmd": self.stopcmd,
-            "powercmd": self.powercmd,
-            "power": self.get_power(),
-            "start-timeout": self.start_timeout,
-            "stop-timeout": self.stop_timeout,
+        attr_norm = attr.replace("-", "_")
+        dispatch: Dict[str, Callable[[], Any]] = {
+            "status": self.get_status,
+            "power": self.get_power,
+            "ip": self.get_ip,
+            "state": lambda: self.state,
+            "params": lambda: self.boot_params,
+            "vmparams": lambda: self.vm_params,
+            "os": lambda: self.os,
+            "kernel": lambda: self.kernel,
+            "resources": lambda: self.resources,
+            "reservation": lambda: self.reservation,
+            "mac": lambda: self.mac,
+            "startcmd": lambda: self.startcmd,
+            "stopcmd": lambda: self.stopcmd,
+            "powercmd": lambda: self.powercmd,
+            "start_timeout": lambda: self.start_timeout,
+            "stop_timeout": lambda: self.stop_timeout,
         }
-        if attr in mapping:
-            return mapping[attr]
+        getter = dispatch.get(attr_norm)
+        if getter:
+            return getter()
+
         self.error("Invalid attribute")
         return None
 
