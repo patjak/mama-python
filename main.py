@@ -896,7 +896,7 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
         attrs = [
             "state", "status", "os", "params", "resources", "kernel", "reservation",
             "ip", "mac", "vmparams", "startcmd", "stopcmd", "powercmd", "power",
-            "start-timeout", "stop-timeout", "is_started", "only_vm"
+            "start-timeout", "stop-timeout", "is_started", "only_vm", "nfs-mounted"
         ]
         attr = questionary.select("Select attribute to get:", choices=attrs).ask()
         if not attr:

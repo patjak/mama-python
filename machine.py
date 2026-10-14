@@ -53,6 +53,7 @@ class Machine:
         "fetching-kernel",
         "fetching-initrd",
         "booting",
+        "nfs-mounted",
     )
 
     SETTABLE_FIELDS: ClassVar[Dict[str, Tuple[str, str, str]]] = {
@@ -435,6 +436,32 @@ class Machine:
         except OSError:
             return "closed"
 
+    def is_nfs_mounted(self) -> bool:
+        """Check if the machine has an active NFSv4 session on the MAMA host via /proc/fs/nfsd/clients."""
+        ip = self.get_ip()
+        if not ip:
+            return False
+
+        nfsd_clients = pathlib.Path("/proc/fs/nfsd/clients")
+        if not nfsd_clients.exists() or not nfsd_clients.is_dir():
+            return False
+
+        try:
+            for client_dir in nfsd_clients.iterdir():
+                info_file = client_dir / "info"
+                if info_file.is_file():
+                    try:
+                        content = info_file.read_text(encoding="utf-8")
+                        # Format in /proc/fs/nfsd/clients/*/info: address: "192.168.2.X:PORT"
+                        if f'"{ip}:' in content:
+                            return True
+                    except OSError:
+                        continue
+        except (OSError, PermissionError):
+            pass
+
+        return False
+
     def is_booting(self) -> bool:
         """Check if machine is currently progressing through active boot phases."""
         return self.state in self.BOOT_STATES or self.state.startswith("fetching-")
@@ -444,7 +471,7 @@ class Machine:
 
         Returns:
             - offline: machine is stopped / powered off.
-            - boot stages: discrete milestone (dhcp-bound, fetching-kernel, booting, etc.).
+            - boot stages: discrete milestone (dhcp-bound, fetching-kernel, booting, nfs-mounted, etc.).
             - online: machine has finished booting and SSH port 22 is open.
             - unresponsive: machine was running/online but stopped responding to ping/SSH.
             - stopping: machine is actively shutting down.
@@ -484,6 +511,9 @@ class Machine:
 
         # 5. Retain intermediate boot stage if still in boot sequence
         if self.is_booting():
+            if self.is_nfs_mounted():
+                if self.state != "nfs-mounted":
+                    self.set_state("nfs-mounted")
             return self.state
 
         if self.state == "boot-failed":
@@ -562,6 +592,8 @@ class Machine:
             return "[yellow]stopping[/yellow]"
         elif state.startswith("fetching-"):
             return f"[bold cyan]{state}[/bold cyan]"
+        elif state == "nfs-mounted":
+            return "[bold blue]nfs-mounted[/bold blue]"
         elif state in (
             "powering-on",
             "starting-vm",
@@ -774,6 +806,7 @@ class Machine:
             "state": self.get_state,
             "power": self.get_power,
             "ip": self.get_ip,
+            "nfs_mounted": lambda: self.is_nfs_mounted(),
             "params": lambda: self.boot_params,
             "vmparams": lambda: self.vm_params,
             "os": lambda: self.os,
