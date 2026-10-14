@@ -513,8 +513,12 @@ class Machine:
             self.set_state(val_str)
             self.out(f"Setting state to: {val_str}")
         elif attr == "os":
-            arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
-            os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
+            if isinstance(val, str) and "/" in val:
+                parts = val.split("/", 1)
+                arch, os_name = parts[0], parts[1]
+            else:
+                arch = getattr(val, "arch", "") if hasattr(val, "arch") else (val.get("arch", "") if isinstance(val, dict) else "")
+                os_name = getattr(val, "os", "") if hasattr(val, "os") else (val.get("os", "") if isinstance(val, dict) else "")
             os_str = f"{arch}/{os_name}"
             if Os.is_runnable(arch, os_name, self):
                 self.out(f"Setting OS {os_str}")

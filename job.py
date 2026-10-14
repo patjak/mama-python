@@ -12,6 +12,7 @@ from rich.console import Console
 import config
 from logger import Log, debug, error, fatal, out
 from options import Options
+from os_mgr import Os
 from repository import (
     Machine,
     select_machine,
@@ -133,6 +134,10 @@ class Job:
         worker_mach.job_pid = str(os.getpid())
         worker_mach.save()
 
+        # Configure worker with the target OS specified on the command line if runnable
+        if Os.is_runnable(arch, os_name, worker_mach):
+            worker_mach.set("os", Os(os_name, arch))
+
         job_content = self._preprocess(job_content, arch, os_name, worker, False)
 
         ret = self.execute(job_content, mach=False, worker=worker_mach)
@@ -183,6 +188,10 @@ class Job:
         mach.job = f"run {self.name} {arch}/{os_name}"
         mach.job_pid = str(os.getpid())
         mach.save()
+
+        # Configure target device with the target OS specified on the command line if runnable
+        if Os.is_runnable(arch, os_name, mach):
+            mach.set("os", Os(os_name, arch))
 
         job_content = self._preprocess(job_content, arch, os_name, False, mach)
 
@@ -237,6 +246,9 @@ class Job:
                             m = worker
 
                         if (context in ("DEVICE", "WORKER")) and m:
+                            # Reload state from database so any OS/kernel updates from [MAMA] are applied
+                            m.load()
+
                             if not m.stop():
                                 return False
 
