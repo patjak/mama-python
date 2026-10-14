@@ -9,14 +9,9 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Union
 
+import questionary
 from rich.console import Console
 from rich.table import Table
-
-try:
-    import questionary
-    HAS_QUESTIONARY = True
-except ImportError:
-    HAS_QUESTIONARY = False
 
 import config
 from logger import Log, debug, error, fatal, out
@@ -482,13 +477,8 @@ class Machine:
 
     def set(self, attr: str, val: Any = "") -> None:
         def prompt_text(prompt_msg: str) -> str:
-            if HAS_QUESTIONARY:
-                try:
-                    res = questionary.text(prompt_msg).ask()
-                    return res if res is not None else ""
-                except Exception:
-                    return Util.get_line(f"{prompt_msg} ")
-            return Util.get_line(f"{prompt_msg} ")
+            res = questionary.text(prompt_msg).ask()
+            return res.strip() if res is not None else ""
 
         if attr == "state":
             out(f"Current state: {self.state or '(none)'}")
