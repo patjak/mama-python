@@ -90,15 +90,7 @@ class Machine:
             pass
 
         if getattr(config, "DEBUG_LOCK", False):
-            msg = f"PID {os.getpid()}: {self.name}: Acquiring machine lock\n"
-            lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
-            try:
-                with open(lock_debug, "a") as f:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                    f.write(msg)
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            except Exception:
-                pass
+            self.debug(f"Acquiring machine lock (PID {os.getpid()})")
 
         with open(lock_file, "a+") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -106,15 +98,7 @@ class Machine:
                 yield
             finally:
                 if getattr(config, "DEBUG_LOCK", False):
-                    msg = f"PID {os.getpid()}: {self.name}: Releasing machine lock\n"
-                    lock_debug = pathlib.Path(config.MAMA_PATH) / "mama-lock-debug"
-                    try:
-                        with open(lock_debug, "a") as f:
-                            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                            f.write(msg)
-                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                    except Exception:
-                        pass
+                    self.debug(f"Releasing machine lock (PID {os.getpid()})")
                 try:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 except Exception:
