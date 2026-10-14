@@ -199,6 +199,12 @@ def select_kernel(mach: Machine) -> str:
 
 
 def cmd_list(fast: bool = False) -> None:
+    if getattr(config, "DHCP_ENABLED", True):
+        try:
+            DnsmasqManager.sync_leases_to_db()
+        except Exception as e:
+            debug(f"Failed to sync DHCP leases: {e}")
+
     console = Console()
     table = Table(
         title="Configured Machines",
@@ -887,6 +893,12 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
 
 
 def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None) -> None:
+    if getattr(config, "DHCP_ENABLED", True) and (not attr or attr in ("ip", "status", "state")):
+        try:
+            DnsmasqManager.sync_leases_to_db()
+        except Exception:
+            pass
+
     mach = select_machine(machine)
 
     if not isinstance(mach, Machine):
@@ -1074,9 +1086,11 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_bootinfo.add_argument("server_ip", help="Server IP address")
     p_bootinfo.add_argument("port", nargs="?", default=None, help="Server port (optional)")
 
+    # DHCP subcommands
     p_dhcp = subparsers.add_parser("dhcp", parents=[parent_parser], help="Manage dnsmasq DHCP server", formatter_class=HELP_FORMATTER)
     dhcp_sub = p_dhcp.add_subparsers(dest="dhcp_action", help="DHCP action", metavar="<action>")
     dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
+    dhcp_sub.add_parser("sync-leases", parents=[parent_parser], help="Sync active DHCP leases to machine database", formatter_class=HELP_FORMATTER)
     dhcp_sub.add_parser("leases", parents=[parent_parser], help="Show active DHCP leases", formatter_class=HELP_FORMATTER)
 
     return root_parser
@@ -1197,10 +1211,15 @@ def main() -> None:
     elif cmd == "dhcp":
         if parsed_args.dhcp_action == "sync":
             if DnsmasqManager.reload_or_restart():
+                DnsmasqManager.sync_leases_to_db()
                 out("dnsmasq synchronized and reloaded successfully.")
             else:
                 fatal("Failed to sync dnsmasq.")
+        elif parsed_args.dhcp_action == "sync-leases":
+            count = DnsmasqManager.sync_leases_to_db()
+            out(f"Synchronized DHCP leases: {count} machine(s) updated.")
         elif parsed_args.dhcp_action == "leases":
+            DnsmasqManager.sync_leases_to_db()
             leases = DnsmasqManager.get_active_leases()
             if not leases:
                 out("No active DHCP leases found.")

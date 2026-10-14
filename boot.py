@@ -150,9 +150,11 @@ class iPXEHandler(BaseHTTPRequestHandler):
             self._send_response(200, response)
             return
 
-        # Track that machine requested its iPXE config
+        # Track that machine requested its iPXE config and sync lease to DB
         try:
             Machine.set_state_by_mac(mac, "ipxe-boot-config")
+            if getattr(config, "DHCP_ENABLED", True):
+                DnsmasqManager.sync_leases_to_db()
         except Exception as e:
             sys.stderr.write(f"[boot.py] Error setting state for MAC {mac}: {e}\n")
 
@@ -200,10 +202,11 @@ def main() -> None:
     # Initialize repository database on server startup
     MachineRepository.load()
 
-    # Synchronize dnsmasq DHCP and built-in TFTP server
+    # Synchronize dnsmasq DHCP, leases, and built-in TFTP server
     if getattr(config, "DHCP_ENABLED", True):
         sys.stderr.write("[boot.py] Synchronizing dnsmasq DHCP/TFTP server...\n")
         DnsmasqManager.reload_or_restart()
+        DnsmasqManager.sync_leases_to_db()
     else:
         DnsmasqManager.generate_autoexec_ipxe()
 

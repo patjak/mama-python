@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import config
 from logger import debug, error, fatal, out
@@ -233,12 +233,15 @@ class DnsmasqManager:
         return leases
 
     @classmethod
-    def sync_leases_to_db(cls) -> None:
-        """Update any started machines lacking an IP in SQLite using active lease data."""
+    def sync_leases_to_db(cls) -> int:
+        """Update any started machines in SQLite using active lease data.
+        Returns the count of updated machines.
+        """
         leases = cls.get_active_leases()
         if not leases:
-            return
+            return 0
 
+        updated_count = 0
         for m_data in MachineRepository.get_all():
             mac = m_data.get("mac", "").lower()
             current_ip = m_data.get("ip", "")
@@ -246,10 +249,18 @@ class DnsmasqManager:
             is_started = to_bool(raw_started)
 
             # Only auto-assign lease IP if the machine is actively marked as started
-            if mac in leases and not current_ip and is_started:
+            if mac in leases and is_started:
                 assigned_ip = leases[mac]
-                MachineRepository.update_fields(
-                    m_data["name"],
-                    {"ip": assigned_ip, "state": "dhcp-bound"},
-                )
-                debug(f"[DHCP] Auto-discovered IP {assigned_ip} for {m_data['name']} from DHCP lease")
+                if current_ip != assigned_ip:
+                    current_state = m_data.get("state", "")
+                    fields_to_update: Dict[str, Any] = {"ip": assigned_ip}
+                    if not current_ip and current_state in ("", "powering-on", "starting-vm", "power-cycling", "offline"):
+                        fields_to_update["state"] = "dhcp-bound"
+                    MachineRepository.update_fields(
+                        m_data["name"],
+                        fields_to_update,
+                    )
+                    debug(f"[DHCP] Auto-discovered IP {assigned_ip} for {m_data['name']} from DHCP lease")
+                    updated_count += 1
+
+        return updated_count
