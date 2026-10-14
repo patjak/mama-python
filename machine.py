@@ -42,6 +42,19 @@ class Machine:
     power_cycle_delay: ClassVar[int] = 30
     resource_wait_timeout: ClassVar[int] = 20 * 60 * 60
 
+    # Known stages during machine initialization and boot
+    BOOT_STATES: ClassVar[Tuple[str, ...]] = (
+        "powering-on",
+        "starting-vm",
+        "power-cycling",
+        "waiting-for-resources",
+        "dhcp-bound",
+        "ipxe-boot-config",
+        "fetching-kernel",
+        "fetching-initrd",
+        "booting",
+    )
+
     SETTABLE_FIELDS: ClassVar[Dict[str, Tuple[str, str, str]]] = {
         "resources": ("resources", "Enter new resources (space separated):", "resources"),
         "params": ("boot parameters", "Enter new boot parameters:", "boot_params"),
@@ -255,7 +268,7 @@ class Machine:
         return cls.from_dict(row) if row else None
 
     def set_state(self, state: str) -> None:
-        """Record the latest boot sequence state for this machine."""
+        """Record the latest lifecycle/boot state for this machine."""
         self.state = state
         MachineRepository.update_fields(self.name, {"state": state})
         self.debug(f"State: {state}")
@@ -395,6 +408,21 @@ class Machine:
             pass
         return "-"
 
+    def is_pingable(self, ip: Optional[str] = None) -> bool:
+        """Check ICMP reachability with a 2-second timeout."""
+        target_ip = ip or self.get_ip()
+        if not target_ip:
+            return False
+        try:
+            res = subprocess.run(
+                ["ping", "-w", "2", "-c", "1", target_ip],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return res.returncode == 0
+        except OSError:
+            return False
+
     def get_ssh_status(self) -> str:
         """Test SSH connectivity using a standard non-blocking TCP socket check."""
         ip = self.get_ip()
@@ -407,33 +435,137 @@ class Machine:
         except OSError:
             return "closed"
 
-    def get_status(self) -> str:
-        # Non-started machines are immediately offline
+    def is_booting(self) -> bool:
+        """Check if machine is currently progressing through active boot phases."""
+        return self.state in self.BOOT_STATES or self.state.startswith("fetching-")
+
+    def get_state(self) -> str:
+        """Resolve the unified machine state.
+
+        Returns:
+            - offline: machine is stopped / powered off.
+            - boot stages: discrete milestone (dhcp-bound, fetching-kernel, booting, etc.).
+            - online: machine has finished booting and SSH port 22 is open.
+            - unresponsive: machine was running/online but stopped responding to ping/SSH.
+            - stopping: machine is actively shutting down.
+        """
+        # 1. Stopped machines are offline
         if not self.is_started:
             if self.ip:
                 self.set_ip("")
+            if self.state != "offline":
+                self.set_state("offline")
             return "offline"
 
+        # 2. Machine undergoing graceful shutdown
+        if self.state == "stopping":
+            ip = self.get_ip()
+            if not ip or not self.is_pingable(ip):
+                return "offline"
+            return "stopping"
+
+        # 3. Resolve active IP address
         ip = self.get_ip()
         if not ip:
-            self.set_ip("")
-            return "offline"
-        else:
-            self.set_ip(ip)
+            if self.is_booting():
+                return self.state
+            if self.state != "unresponsive":
+                self.set_state("unresponsive")
+            return "unresponsive"
 
-        res = subprocess.run(
-            ["ping", "-w", "3", "-c", "1", ip],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if res.returncode == 0:
-            if self.get_ssh_status() == "open":
-                return "online"
-            else:
-                return "unreachable"
+        # 4. Check network and SSH connectivity
+        ping_ok = self.is_pingable(ip)
+        ssh_ok = (self.get_ssh_status() == "open") if ping_ok else False
 
-        self.set_ip("")
-        return "offline"
+        if ssh_ok:
+            if self.state != "online":
+                self.set_state("online")
+            return "online"
+
+        # 5. Retain intermediate boot stage if still in boot sequence
+        if self.is_booting():
+            return self.state
+
+        if self.state == "boot-failed":
+            return "boot-failed"
+
+        # 6. Machine finished boot or was online, but ping/SSH dropped
+        if self.state != "unresponsive":
+            self.set_state("unresponsive")
+        return "unresponsive"
+
+    def get_status(self) -> str:
+        """Backward compatibility alias for get_state."""
+        return self.get_state()
+
+    def wait_for_state(self, target_state: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
+        """Wait for machine to reach a specific unified lifecycle state."""
+        try:
+            seconds_int = int(seconds) if seconds else 0
+        except (ValueError, TypeError):
+            seconds_int = 0
+
+        start_time = time.time()
+
+        if dont_print:
+            while self.get_state() != target_state:
+                time_passed = time.time() - start_time
+                time.sleep(1)
+                if seconds_int > 0 and time_passed >= seconds_int:
+                    return False
+            return True
+
+        console = Console()
+        with console.status(f"[bold yellow]({self.name}) Waiting for state: {target_state}...[/bold yellow]") as spinner:
+            while True:
+                curr_state = self.get_state()
+                if curr_state == target_state:
+                    break
+
+                time_passed = time.time() - start_time
+                if seconds_int > 0 and time_passed >= seconds_int:
+                    self.error(f"timed out after {seconds_int}s", no_eol=False, timestamp=False)
+                    return False
+
+                time.sleep(1)
+                spinner.update(
+                    f"[bold yellow]({self.name}) State: [bold cyan]{curr_state}[/bold cyan] -> "
+                    f"Waiting for: [bold green]{target_state}[/bold green] "
+                    f"({int(time_passed)}s / {seconds_int}s)...[/bold yellow]"
+                )
+
+        time_passed_int = int(time.time() - start_time)
+        self.debug(f"State '{target_state}' reached after {time_passed_int}s")
+        return True
+
+    def wait_for_status(self, status: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
+        """Backward-compatible alias for wait_for_state."""
+        return self.wait_for_state(status, seconds, dont_print=dont_print)
+
+    @staticmethod
+    def format_state(state: str) -> str:
+        """Format state with rich color syntax for terminal output."""
+        if state == "online":
+            return "[bold green]online[/bold green]"
+        elif state == "offline":
+            return "[dim red]offline[/dim red]"
+        elif state in ("unresponsive", "unreachable", "boot-failed"):
+            return f"[bold red]{state}[/bold red]"
+        elif state == "stopping":
+            return "[yellow]stopping[/yellow]"
+        elif state.startswith("fetching-"):
+            return f"[bold cyan]{state}[/bold cyan]"
+        elif state in (
+            "powering-on",
+            "starting-vm",
+            "power-cycling",
+            "waiting-for-resources",
+            "dhcp-bound",
+            "ipxe-boot-config",
+            "booting",
+        ):
+            return f"[bold yellow]{state}[/bold yellow]"
+        return f"[cyan]{state}[/cyan]" if state else "[dim]-[/dim]"
 
     def is_job_stale(self) -> bool:
         if not self.job:
@@ -477,13 +609,7 @@ class Machine:
         table.add_column("Value", style="bold white")
 
         ip = self.get_ip() or "-"
-        status = self.get_status()
-        if status == "online":
-            status_str = "[bold green]online[/bold green]"
-        elif status == "unreachable":
-            status_str = "[bold yellow]unreachable[/bold yellow]"
-        else:
-            status_str = "[dim red]offline[/dim red]"
+        state_str = self.format_state(self.get_state())
 
         table.add_row("Name", self.name)
         table.add_row("MAC", self.mac)
@@ -492,8 +618,7 @@ class Machine:
         table.add_row("Is only VM", "[cyan]yes[/cyan]" if self.only_vm else "[dim]no[/dim]")
         table.add_row("OS", self.os or "-")
         table.add_row("Kernel", self.kernel or "-")
-        table.add_row("Status", status_str)
-        table.add_row("State", f"[bold cyan]{self.state}[/bold cyan]" if self.state else "-")
+        table.add_row("State", state_str)
 
         if self.reservation:
             table.add_row("Reserved by", f"[bold magenta]{self.reservation}[/bold magenta]")
@@ -638,10 +763,10 @@ class Machine:
     def get(self, attr: str) -> Any:
         attr_norm = attr.replace("-", "_")
         dispatch: Dict[str, Callable[[], Any]] = {
-            "status": self.get_status,
+            "status": self.get_state,
+            "state": self.get_state,
             "power": self.get_power,
             "ip": self.get_ip,
-            "state": lambda: self.state,
             "params": lambda: self.boot_params,
             "vmparams": lambda: self.vm_params,
             "os": lambda: self.os,
@@ -668,38 +793,6 @@ class Machine:
         if not self.os:
             return ""
         return self.os.split("/")[0]
-
-    def wait_for_status(self, status: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
-        try:
-            seconds_int = int(seconds) if seconds else 0
-        except (ValueError, TypeError):
-            seconds_int = 0
-
-        start_time = time.time()
-
-        if dont_print:
-            while self.get_status() != status:
-                time_passed = time.time() - start_time
-                time.sleep(1)
-                if seconds_int > 0 and time_passed >= seconds_int:
-                    return False
-            return True
-
-        console = Console()
-        with console.status(f"[bold yellow]({self.name}) Waiting for status: {status}...[/bold yellow]") as status_spinner:
-            while self.get_status() != status:
-                time_passed = time.time() - start_time
-                if seconds_int > 0 and time_passed >= seconds_int:
-                    self.error(f"timed out after {seconds_int}s", no_eol=False, timestamp=False)
-                    return False
-                time.sleep(1)
-                status_spinner.update(
-                    f"[bold yellow]({self.name}) Waiting for status: {status} ({int(time_passed)}s / {seconds_int}s)...[/bold yellow]"
-                )
-
-        time_passed_int = int(time.time() - start_time)
-        self.debug(f"Status reached after {time_passed_int} s")
-        return True
 
     @staticmethod
     def get_nested_resources(mach_name: str) -> str:
@@ -757,8 +850,8 @@ class Machine:
         return True
 
     def start(self) -> bool:
-        status = self.get_status()
-        if status == "online":
+        curr_state = self.get_state()
+        if curr_state == "online":
             self.error("Machine is already started")
             return False
 
@@ -778,7 +871,7 @@ class Machine:
             self.error("No kernel set for machine")
             return False
 
-        if status == "unreachable":
+        if curr_state in ("unresponsive", "unreachable"):
             self.set_state("power-cycling")
             self.stop()
             self.debug(f"Waiting for power cycle delay: {self.power_cycle_delay}")
@@ -794,7 +887,7 @@ class Machine:
         self.is_started = True
         MachineRepository.update_fields(self.name, {"_is_started": 1})
 
-        if status == "offline":
+        if curr_state == "offline":
             self.set_state("powering-on")
             if self.startcmd:
                 startcmd = self._preprocess_cmd(self.startcmd)
@@ -809,7 +902,7 @@ class Machine:
         self.debug(f"Using bare-metal boot timeout: {effective_timeout}s for OS {self.os}")
 
         t_start = time.time()
-        ret = self.wait_for_status("online", effective_timeout)
+        ret = self.wait_for_state("online", effective_timeout)
 
         if ret:
             self.set_state("online")
@@ -932,7 +1025,7 @@ class Machine:
             "-m", str(1024 * 44),
             "-net", f"nic,model=virtio,macaddr={self.mac}",
             "-net", "bridge,br=br0",
-            "-nographic",
+            "-display", "none",
             "-chardev", f"file,id=char0,path={vmlog_path}",
             "-serial", "chardev:char0",
             "-monitor", "none",
@@ -970,9 +1063,20 @@ class Machine:
             qemu_cmd.extend(shlex.split(self.vm_params))
 
         self.debug(shlex.join(qemu_cmd))
-        subprocess.run(qemu_cmd)
+        res = subprocess.run(qemu_cmd)
+        if res.returncode != 0:
+            self.error("Failed to start QEMU daemon.")
+            self.set_state("boot-failed")
+            self.clear()
+            return False
 
         time.sleep(3)
+
+        if self.get_vm_pid() is None:
+            self.error("QEMU process exited immediately after starting.")
+            self.set_state("boot-failed")
+            self.clear()
+            return False
 
         effective_timeout = MachineRepository.get_calculated_start_timeout(
             self.name, self.os, "vm", default_timeout=self.start_timeout
@@ -980,7 +1084,7 @@ class Machine:
         self.debug(f"Using VM boot timeout: {effective_timeout}s for OS {self.os}")
 
         t_start = time.time()
-        ret = self.wait_for_status("online", effective_timeout)
+        ret = self.wait_for_state("online", effective_timeout)
 
         if ret:
             self.set_state("online")
@@ -1005,7 +1109,6 @@ class Machine:
             return True
 
         self.out("Stopping machine")
-        self.set_state("stopping")
 
         boot_type = "vm" if self.is_vm() else "bm"
         effective_timeout = MachineRepository.get_calculated_stop_timeout(
@@ -1013,15 +1116,17 @@ class Machine:
         )
         self.debug(f"Using {boot_type.upper()} stop timeout: {effective_timeout}s for OS {self.os}")
 
-        status = self.get_status()
+        # Check reachability before transitioning state to 'stopping'
+        ssh_was_open = (self.get_ssh_status() == "open")
+        self.set_state("stopping")
         t_stop_start = time.time()
 
-        if status == "online":
+        if ssh_was_open:
             shutdown_cmd = "halt" if (self.startcmd or self.stopcmd) else "poweroff"
             self.ssh_cmd(shutdown_cmd)
 
-        if self.wait_for_status("offline", effective_timeout):
-            if status == "online":
+            halted = self.wait_for_state("offline", effective_timeout)
+            if halted:
                 elapsed = int(time.time() - t_stop_start)
                 MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed, stop_time=int(time.time()))
                 new_timeout = MachineRepository.get_calculated_stop_timeout(self.name, self.os, boot_type)
@@ -1029,17 +1134,17 @@ class Machine:
                 self.debug(
                     f"{boot_type.upper()} stop finished in {elapsed}s. Updated stop timeout for {self.os} to {new_timeout}s."
                 )
+            else:
+                self.error(f"Graceful shutdown timed out after {effective_timeout}s. Forcing power off.")
 
-            if self.stopcmd:
-                stopcmd = self._preprocess_cmd(self.stopcmd)
-                self.debug(f"Stop command: {stopcmd}")
-                subprocess.run(stopcmd, shell=True)
-
-            if self.is_vm():
-                self.debug("Killing VM")
-                self.kill_vm()
+        # Ensure power command executes even if graceful halt timed out or machine was hung
+        if self.stopcmd:
+            stopcmd = self._preprocess_cmd(self.stopcmd)
+            self.debug(f"Stop command: {stopcmd}")
+            subprocess.run(stopcmd, shell=True)
 
         if self.is_vm():
+            self.debug("Killing VM")
             self.kill_vm()
 
         self.clear()
@@ -1105,9 +1210,11 @@ class Machine:
                 self.load()
 
     def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
-        if not self.wait_for_status("online", 30, dont_print=True):
-            self.error("Unable to execute ssh cmd since machine is not online.")
-            return False
+        # Fast path: proceed directly if SSH port 22 is already open
+        if self.get_ssh_status() != "open":
+            if not self.wait_for_state("online", 30, dont_print=True):
+                self.error("Unable to execute ssh cmd since machine is not online.")
+                return False
 
         self.debug(f"ssh: {cmd}")
         ip = self.get_ip()

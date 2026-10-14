@@ -31,7 +31,6 @@ try:
 except ImportError:
     HAS_ARGCOMPLETE = False
 
-# Environment & helper stubs
 from builder import build_os, run_os_build_script
 import config
 from dhcp import DnsmasqManager
@@ -113,7 +112,7 @@ def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
             return False
 
         choices = [
-            f"{m.name} ({m.mac}) - status: {m.get_status()}, ip: {m.get_ip() or 'N/A'}"
+            f"{m.name} ({m.mac}) - state: {m.get_state()}, ip: {m.get_ip() or 'N/A'}"
             for m in machs
         ]
         ans = questionary.select("Select target machine:", choices=choices).ask()
@@ -211,8 +210,7 @@ def cmd_list(fast: bool = False) -> None:
     table.add_column("Name", style="bold white")
     table.add_column("IP", style="green")
     table.add_column("MAC", style="magenta")
-    table.add_column("Status")
-    table.add_column("State", style="cyan")
+    table.add_column("State")
     table.add_column("On", justify="center")
     table.add_column("Pwr", justify="right", style="yellow")
     table.add_column("VM", justify="center")
@@ -226,15 +224,10 @@ def cmd_list(fast: bool = False) -> None:
                 mach.set_ip("")
 
             ip = mach.ip if mach.is_started else "-"
-
-            if not mach.is_started:
-                status_str = "[dim red]offline[/dim red]"
-            elif mach.state == "online":
-                status_str = "[bold green]online[/bold green]"
-            elif mach.state:
-                status_str = f"[bold yellow]{mach.state}[/bold yellow]"
-            else:
-                status_str = "[bold yellow]booting[/bold yellow]"
+            raw_state = mach.state if mach.is_started else "offline"
+            if not raw_state:
+                raw_state = "booting" if mach.is_started else "offline"
+            state_str = Machine.format_state(raw_state)
 
             started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
             vm_str = "[cyan]Yes[/cyan]" if mach.only_vm else "[dim]-[/dim]"
@@ -247,8 +240,7 @@ def cmd_list(fast: bool = False) -> None:
                 "name": mach.name,
                 "ip": ip or "-",
                 "mac": mach.mac,
-                "status_str": status_str,
-                "state_str": mach.state or "offline",
+                "state_str": state_str,
                 "started_str": started_str,
                 "power": "-",
                 "vm_str": vm_str,
@@ -256,14 +248,8 @@ def cmd_list(fast: bool = False) -> None:
             }
 
         ip = mach.get_ip() or "-"
-        status = mach.get_status()
-
-        if status == "online":
-            status_str = "[bold green]online[/bold green]"
-        elif status == "unreachable":
-            status_str = "[bold yellow]unreachable[/bold yellow]"
-        else:
-            status_str = "[dim red]offline[/dim red]"
+        state = mach.get_state()
+        state_str = Machine.format_state(state)
 
         started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
         vm_str = "[cyan]Yes[/cyan]" if mach.is_vm() else "[dim]-[/dim]"
@@ -278,8 +264,7 @@ def cmd_list(fast: bool = False) -> None:
             "name": mach.name,
             "ip": ip,
             "mac": mach.mac,
-            "status_str": status_str,
-            "state_str": mach.state or "-",
+            "state_str": state_str,
             "started_str": started_str,
             "power": power,
             "vm_str": vm_str,
@@ -299,7 +284,6 @@ def cmd_list(fast: bool = False) -> None:
             data["name"],
             data["ip"],
             data["mac"],
-            data["status_str"],
             data["state_str"],
             data["started_str"],
             data["power"],
@@ -953,7 +937,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources", formatter_class=HELP_FORMATTER)
 
-    # Consolidated Log Subcommand
     p_log = subparsers.add_parser("log", parents=[parent_parser], help="View, follow, or clear logs", formatter_class=HELP_FORMATTER)
     p_log_mach = p_log.add_argument("machine", nargs="?", default=False, help="Target machine (defaults to mama-log)")
     p_log_mach.completer = machine_completer
@@ -965,7 +948,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_hist_mach.completer = machine_completer
 
-    # Job subcommands
     job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows", formatter_class=HELP_FORMATTER)
     job_p.add_argument("job_name", help="Job name")
     job_sub = job_p.add_subparsers(dest="job_action", help="Job action", metavar="<action>")
@@ -986,7 +968,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     run_p_os = run_p.add_argument("os", help="Target OS")
     run_p_os.completer = os_completer
 
-    # OS Build and Management
     p_build = subparsers.add_parser("build-os", parents=[parent_parser], help="Build a deployable OS", formatter_class=HELP_FORMATTER)
     p_build_arch = p_build.add_argument("arch", help="Architecture")
     p_build_arch.completer = arch_completer
@@ -1027,7 +1008,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_copy_dst = p_copy_os.add_argument("dst_mach", help="Destination machine")
     p_copy_dst.completer = machine_completer
 
-    # Machine operations
     subparsers.add_parser("new", parents=[parent_parser], help="Add a new machine", formatter_class=HELP_FORMATTER)
 
     p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete an existing machine", formatter_class=HELP_FORMATTER)
@@ -1073,7 +1053,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_res_mach = p_res.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_res_mach.completer = machine_completer
 
-    # Consolidated Release Subcommand
     p_rel = subparsers.add_parser("release", parents=[parent_parser], help="Release machine reservation", formatter_class=HELP_FORMATTER)
     p_rel_mach = p_rel.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_rel_mach.completer = machine_completer
@@ -1095,7 +1074,6 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_bootinfo.add_argument("server_ip", help="Server IP address")
     p_bootinfo.add_argument("port", nargs="?", default=None, help="Server port (optional)")
 
-    # DHCP subcommands
     p_dhcp = subparsers.add_parser("dhcp", parents=[parent_parser], help="Manage dnsmasq DHCP server", formatter_class=HELP_FORMATTER)
     dhcp_sub = p_dhcp.add_subparsers(dest="dhcp_action", help="DHCP action", metavar="<action>")
     dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
