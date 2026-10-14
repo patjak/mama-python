@@ -11,7 +11,6 @@ from rich.console import Console
 # Environment & helper stubs
 import config
 from logger import Log, debug, error, fatal, out
-from options import Options
 from os_mgr import Os
 from repository import (
     Machine,
@@ -20,12 +19,21 @@ from repository import (
 
 
 class Job:
-    def __init__(self, name: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        args: str = "",
+        no_ssh_timeout: bool = False,
+        no_retry: bool = False,
+    ) -> None:
         self.name: str = name
         self.type: str = ""
         self.arch: str = ""
         self.os: str = ""
         self.mach: Any = False
+        self.args: str = args
+        self.no_ssh_timeout: bool = no_ssh_timeout
+        self.no_retry: bool = no_retry
 
     def _is_active_job(self, job_str: str, mach: Any = False) -> bool:
         machs = Machine.get_all()
@@ -83,13 +91,12 @@ class Job:
             mach_name = getattr(mach, "name", str(mach))
             job_content = job_content.replace("$MACH", mach_name)
 
-        args_str = getattr(Options, "options", {}).get("args", "")
-        args_list = args_str.split() if args_str else []
+        args_list = self.args.split() if self.args else []
 
         for i, arg_val in enumerate(args_list, start=1):
             job_content = job_content.replace(f"$ARG{i}", arg_val)
 
-        job_content = job_content.replace("$ARGS", args_str)
+        job_content = job_content.replace("$ARGS", self.args)
 
         return job_content
 
@@ -207,7 +214,7 @@ class Job:
         return ret
 
     def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
-        no_retry = getattr(Options, "options", {}).get("no-retry", False)
+        no_retry = self.no_retry
 
         ssh_ret = 0  # Stores return code from last executed command
         error_flag = False
@@ -292,10 +299,10 @@ class Job:
             res_code = 0
 
             if context == "DEVICE" and mach:
-                res_code = mach.ssh_cmd(line)
+                res_code = mach.ssh_cmd(line, no_timeout=self.no_ssh_timeout)
                 mach_for_log = mach
             elif context == "WORKER" and worker:
-                res_code = worker.ssh_cmd(line)
+                res_code = worker.ssh_cmd(line, no_timeout=self.no_ssh_timeout)
                 mach_for_log = worker
 
             if context in ("DEVICE", "WORKER"):

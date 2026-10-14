@@ -20,7 +20,6 @@ except ImportError:
 
 import config
 from logger import Log, debug, error, fatal, out
-from options import Options
 from os_mgr import Os
 from repository import MachineRepository
 from util import Util
@@ -184,49 +183,6 @@ class Machine:
             self.stop_timeout = int(stop_tout) if stop_tout and str(stop_tout).strip() else self.stop_timeout_default
         except (ValueError, TypeError):
             self.stop_timeout = self.stop_timeout_default
-
-    def fill_from_xmlobj(self, obj: Any) -> None:
-        """Backwards compatibility wrapper for XML elements or dictionaries."""
-        if isinstance(obj, dict):
-            self.fill_from_dict(obj)
-            return
-
-        def get_val(key: str, default: str = "") -> str:
-            if hasattr(obj, "find") and callable(getattr(obj, "find")):
-                child = obj.find(key)
-                if child is not None and child.text is not None:
-                    return child.text
-                return default
-            elif hasattr(obj, key):
-                val = getattr(obj, key)
-                if val is not None and not callable(val):
-                    return str(val)
-                return default
-            return default
-
-        d = {
-            "name": get_val("name"),
-            "mac": get_val("mac"),
-            "ip": get_val("ip"),
-            "_is_started": get_val("_is_started") or get_val("is_started"),
-            "state": get_val("state"),
-            "arch": get_val("arch"),
-            "os": get_val("os"),
-            "kernel": get_val("kernel"),
-            "reservation": get_val("reservation"),
-            "resources": get_val("resources"),
-            "boot_params": get_val("boot_params"),
-            "vm_params": get_val("vm_params"),
-            "only_vm": get_val("only_vm"),
-            "job": get_val("job"),
-            "job_pid": get_val("job_pid"),
-            "startcmd": get_val("startcmd"),
-            "stopcmd": get_val("stopcmd"),
-            "powercmd": get_val("powercmd"),
-            "start_timeout": get_val("start_timeout"),
-            "stop_timeout": get_val("stop_timeout"),
-        }
-        self.fill_from_dict(d)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert machine attributes into dictionary representation for DB upserts."""
@@ -1064,8 +1020,7 @@ class Machine:
                 time.sleep(10)
                 self.load()
 
-    def ssh_cmd(self, cmd: str) -> Union[int, bool]:
-        no_timeout = getattr(Options, "options", {}).get("no-ssh-timeout", False)
+    def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
         timeout_str = "" if no_timeout else f"timeout --foreground {self.ssh_cmd_timeout}m"
 
         if self.wait_for_status("online", 30, dont_print=True):

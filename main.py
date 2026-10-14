@@ -40,7 +40,6 @@ from dhcp import DnsmasqManager
 from job import Job
 from logger import Log, debug, error, fatal, out
 from machine import Machine
-from options import Options
 from os_mgr import Arch, Os
 from repository import MachineRepository, Util
 
@@ -91,67 +90,6 @@ def arch_completer(prefix: str, parsed_args: Any, **kwargs: Any) -> List[str]:
         return [a for a in archs if a.startswith(prefix)]
     except Exception:
         return []
-
-
-def print_usage(argv: List[str]) -> None:
-    usage = """Commands:
-list [--fast]                                   - list configured machines (--fast skips probing)
-list-os [machine]                               - list available OSes
-list-kernel [machine]                           - list available kernels
-list-resources                                  - list all resources and what is using them
-log [machine]                                   - print log file
-tail [machine]                                  - tail log file
-clear-log [machine]                             - clear the log for machine
-vmlog [machine] [-f]                            - print VM serial console output (-f to follow)
-tail-vmlog [machine]                            - follow VM serial console output in real time
-history [machine]                               - list recorded start/stop durations and timestamps
-job <job> prepare <arch> <os> [worker]          - Execute prepare part of job for arch and os
-  [--args=] - Additional arguments to pass along
-  [--no-ssh-timeout] - Allows ssh commands to run indefinitely
-
-job <job> run <machine> <arch> <os>             - Execute job on specified machine
-  [--args=] - Additional arguments to pass along
-  [--no-ssh-timeout] - Allows ssh commands to run indefinitely
-  [--no-retry] - Don't retry to start machines multiple times
-
-build-os <arch> <os> [worker]                   - build a deployable os locally or on specified machine
-  [--packages=...] - Additional packages to install
-
-install-os <machine> <arch> <os> [name]         - install os to a machine
-delete-os <machine> <arch> <os>                 - delete an os installed to a machine
-copy-os <src-mach> <arch> <os> <dst-mach>       - copy an os from one machine to another
-new                                             - add a new machine
-delete [machine]                                - delete existing machine
-info [machine]                                  - show machine detailed info
-start [machine]                                 - boot machine
-start-vm [machine]                              - boot virtual instance of machine
-stop [machine]                                  - triggers power button
-clear [machine | all]                           - stop machine and clear stale data (ip, job, etc)
-connect [machine]                               - connect to machine with ssh
-set <machine>   state <state>                   - set machine boot state
-                os <os>                         - set os for machine
-                kernel <kernel>                 - set kernel for machine
-                resources <resources>           - comma separated list of resources to set
-                params <boot parameters>        - Set additional kernel command line parameters
-                vmparams <VM parameters>        - Add additional QEMU command line parameters
-                startcmd <command>              - Run a command instead of the normal start routine
-                stopcmd <command>               - Run a command after normal halt/poweroff of machine
-                powercmd <command>              - Run a command to fetch current power usage in Watts
-                start-timeout <seconds>         - Set machine start timeout in seconds
-                stop-timeout <seconds>          - Set machine stop timeout in seconds
-get <machine> [state | status | os | params | resources | kernel
-               reservation | ip | mac | vmparams |
-               startcmd | stopcmd | powercmd | power |
-               start-timeout | stop-timeout ]   - Get machine attribute
-reserve <machine>                               - Reserve the machine for the current user
-release <machine>                               - Release any reservation you have on the machine
-release-forced <machine>                        - Release the machine even if you didn't reserve it
-wait <machine>                                  - Wait for a machine to become available for use
-serve                                           - start the iPXE boot server
-dhcp sync                                       - regenerate dnsmasq config and reload service
-dhcp leases                                     - list active DHCP leases
-"""
-    out(usage, no_eol=True, timestamp=False)
 
 
 def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
@@ -677,8 +615,15 @@ def cmd_history(arg: Union[str, bool, None] = False) -> None:
     console.print(table)
 
 
-def cmd_job_prepare(job_name: str, arch: str, os_name: str, worker: str = "jobs") -> None:
-    job = Job(job_name)
+def cmd_job_prepare(
+    job_name: str,
+    arch: str,
+    os_name: str,
+    worker: str = "jobs",
+    args: str = "",
+    no_ssh_timeout: bool = False,
+) -> None:
+    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout)
     job.type = "prepare"
     job.arch = arch
     job.os = os_name
@@ -686,8 +631,16 @@ def cmd_job_prepare(job_name: str, arch: str, os_name: str, worker: str = "jobs"
     job.execute_prepare_job()
 
 
-def cmd_job_run(job_name: str, machine: str, arch: str, os_name: str) -> None:
-    job = Job(job_name)
+def cmd_job_run(
+    job_name: str,
+    machine: str,
+    arch: str,
+    os_name: str,
+    args: str = "",
+    no_ssh_timeout: bool = False,
+    no_retry: bool = False,
+) -> None:
+    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout, no_retry=no_retry)
     job.type = "run"
     job.mach = machine
     job.arch = arch
@@ -695,9 +648,7 @@ def cmd_job_run(job_name: str, machine: str, arch: str, os_name: str) -> None:
     job.execute_run_job()
 
 
-def cmd_build_os(arch: str, os_name: str, builder: str = "os-builder") -> None:
-    packages = Options.options.get("packages", "")
-
+def cmd_build_os(arch: str, os_name: str, builder: str = "os-builder", packages: str = "") -> None:
     builder_mach = select_machine(builder)
     if not isinstance(builder_mach, Machine):
         fatal("Invalid builder machine name")
@@ -712,18 +663,18 @@ def cmd_build_os(arch: str, os_name: str, builder: str = "os-builder") -> None:
     need_sudo = "" if Util.is_root() else "sudo"
 
     if mama_arch == arch and builder_mach.is_only_vm():
-        cmd_run_os_build_script(arch, os_name)
+        cmd_run_os_build_script(arch, os_name, packages=packages)
     else:
+        pkg_arg = f' --args="{packages}"' if packages else ""
         subprocess.run(
-            f'{need_sudo} mama job os-builder run {builder} {arch} {os_name} --args="{packages}"',
+            f"{need_sudo} mama job os-builder run {builder} {arch} {os_name}{pkg_arg}",
             shell=True,
         )
 
 
-def cmd_run_os_build_script(arch: str, os_name: str) -> None:
+def cmd_run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     packages_str = ""
-    packages = Options.options.get("packages", "").split()
-    for package in packages:
+    for package in packages.split():
         packages_str += f" --add-package={package}"
 
     if not Util.is_root():
@@ -802,7 +753,7 @@ def cmd_run_os_build_script(arch: str, os_name: str) -> None:
 
         res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
         if res.returncode != 0:
-            fatal("Failed to remove old version of os: {target}")
+            fatal(f"Failed to remove old version of os: {target}")
 
         res = subprocess.run(f"{need_sudo} mkdir -p {pathlib.Path(config.MAMA_PATH) / 'os' / arch}", shell=True)
         if res.returncode != 0:
@@ -891,9 +842,13 @@ def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
             fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
 
 
-def cmd_copy_os(src_machine_name: str, arch: str, os_name: str, dst_machine_name: str) -> None:
-    no_overwrite = getattr(Options, "options", {}).get("no-overwrite", False)
-
+def cmd_copy_os(
+    src_machine_name: str,
+    arch: str,
+    os_name: str,
+    dst_machine_name: str,
+    no_overwrite: bool = False,
+) -> None:
     if not Util.is_root():
         error("You must be root to run this command")
 
@@ -1432,17 +1387,6 @@ def main() -> None:
     config.DEBUG_LOCK = parsed_args.debug_lock
     config.DEBUG_PID = parsed_args.debug_pid
 
-    Options.options = {
-        "debug": parsed_args.debug,
-        "debug-lock": parsed_args.debug_lock,
-        "debug-pid": parsed_args.debug_pid,
-        "args": parsed_args.args or "",
-        "packages": parsed_args.packages or "",
-        "no-ssh-timeout": parsed_args.no_ssh_timeout,
-        "no-retry": parsed_args.no_retry,
-        "no-overwrite": parsed_args.no_overwrite,
-    }
-
     db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
     if MachineRepository.load() is False:
         fatal(f"Failed to initialize database: {db_path}\n")
@@ -1461,21 +1405,42 @@ def main() -> None:
         cmd_history(parsed_args.machine)
     elif cmd == "job":
         if parsed_args.job_action == "prepare":
-            cmd_job_prepare(parsed_args.job_name, parsed_args.arch, parsed_args.os, parsed_args.worker)
+            cmd_job_prepare(
+                parsed_args.job_name,
+                parsed_args.arch,
+                parsed_args.os,
+                parsed_args.worker,
+                args=parsed_args.args or "",
+                no_ssh_timeout=parsed_args.no_ssh_timeout,
+            )
         elif parsed_args.job_action == "run":
-            cmd_job_run(parsed_args.job_name, parsed_args.machine, parsed_args.arch, parsed_args.os)
+            cmd_job_run(
+                parsed_args.job_name,
+                parsed_args.machine,
+                parsed_args.arch,
+                parsed_args.os,
+                args=parsed_args.args or "",
+                no_ssh_timeout=parsed_args.no_ssh_timeout,
+                no_retry=parsed_args.no_retry,
+            )
         else:
             fatal("Invalid job command")
     elif cmd == "build-os":
-        cmd_build_os(parsed_args.arch, parsed_args.os, parsed_args.builder)
+        cmd_build_os(parsed_args.arch, parsed_args.os, parsed_args.builder, packages=parsed_args.packages or "")
     elif cmd == "run-os-build-script":
-        cmd_run_os_build_script(parsed_args.arch, parsed_args.os)
+        cmd_run_os_build_script(parsed_args.arch, parsed_args.os, packages=parsed_args.packages or "")
     elif cmd == "install-os":
         cmd_install_os(parsed_args.machine, parsed_args.arch, parsed_args.os, parsed_args.name)
     elif cmd == "delete-os":
         cmd_delete_os(parsed_args.machine, parsed_args.arch, parsed_args.os)
     elif cmd == "copy-os":
-        cmd_copy_os(parsed_args.src_mach, parsed_args.arch, parsed_args.os, parsed_args.dst_mach)
+        cmd_copy_os(
+            parsed_args.src_mach,
+            parsed_args.arch,
+            parsed_args.os,
+            parsed_args.dst_mach,
+            no_overwrite=parsed_args.no_overwrite,
+        )
     elif cmd == "new":
         cmd_new()
     elif cmd == "delete":
