@@ -178,8 +178,7 @@ class DnsmasqManager:
         """Validate dnsmasq configuration syntax."""
         conf_path = getattr(config, "DNSMASQ_CONF_PATH", "/etc/dnsmasq.d/mama.conf")
         res = subprocess.run(
-            f"dnsmasq --test -C {conf_path}",
-            shell=True,
+            ["dnsmasq", "--test", "-C", str(conf_path)],
             capture_output=True,
             text=True,
         )
@@ -200,7 +199,7 @@ class DnsmasqManager:
         if not cls.test_syntax():
             return False
 
-        res = subprocess.run("systemctl restart dnsmasq", shell=True)
+        res = subprocess.run(["systemctl", "restart", "dnsmasq"])
         if res.returncode == 0:
             out("[DHCP] Restarted dnsmasq service.")
             return True

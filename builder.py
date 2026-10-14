@@ -35,24 +35,21 @@ def build_os(
     if not Os.is_buildable(arch, os_name):
         fatal(f"Invalid os: {arch}/{os_name}")
 
-    mama_arch = subprocess.check_output("uname -p", shell=True, text=True).strip()
-    need_sudo = "" if Util.is_root() else "sudo"
+    mama_arch = subprocess.check_output(["uname", "-p"], text=True).strip()
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
 
     if mama_arch == arch and builder_mach.only_vm:
         run_os_build_script(arch, os_name, packages=packages)
     else:
-        pkg_arg = f' --args="{packages}"' if packages else ""
-        subprocess.run(
-            f"{need_sudo} mama job os-builder run {builder_mach.name} {arch} {os_name}{pkg_arg}",
-            shell=True,
-        )
+        cmd = sudo_prefix + ["mama", "job", "os-builder", "run", builder_mach.name, arch, os_name]
+        if packages:
+            cmd.extend(["--args", packages])
+        subprocess.run(cmd)
 
 
 def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     """Execute local Kiwi-ng build, mount proc/sys, chroot dracut initramfs generation, and install authorized_keys."""
-    packages_str = ""
-    for package in packages.split():
-        packages_str += f" --add-package={package}"
+    packages_list = [f"--add-package={p}" for p in packages.split()]
 
     if not Util.is_root():
         out("You must be root to run this command")
@@ -69,90 +66,102 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
 
     target = pathlib.Path(config.MAMA_PATH) / "os" / arch / os_name
     desc = pathlib.Path(config.MAMA_PATH) / "os-descriptions" / arch / os_name
-    need_sudo = "" if Util.is_root() else "sudo"
     tmp_dir = pathlib.Path(f"/dev/shm/mama-kiwi-{arch}-{os_name}")
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
 
     with Os.lock(arch, os_name, shared=False):
-        subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+        subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
+
+        kiwi_cmd = sudo_prefix + [
+            "kiwi-ng",
+            "--debug",
+            "system",
+            "prepare",
+            "--description",
+            str(desc),
+            "--root",
+            str(tmp_dir),
+        ] + packages_list
 
         console = Console()
         with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
-            cmd = f"{need_sudo} kiwi-ng --debug system prepare --description {desc} --root {tmp_dir}{packages_str}"
-            out(cmd)
-            res = subprocess.run(cmd, shell=True)
+            out(" ".join(kiwi_cmd))
+            res = subprocess.run(kiwi_cmd)
 
         if res.returncode != 0:
             error("Failed to build os with kiwi")
-            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
             return
 
         with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
-            res = subprocess.run(f"{need_sudo} mount -t proc /proc {tmp_dir / 'proc'}", shell=True)
+            res = subprocess.run(sudo_prefix + ["mount", "-t", "proc", "/proc", str(tmp_dir / "proc")])
             if res.returncode != 0:
                 error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
-                subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+                subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
 
-            res = subprocess.run(f"{need_sudo} mount -t sysfs sysfs {tmp_dir / 'sys'}", shell=True)
+            res = subprocess.run(sudo_prefix + ["mount", "-t", "sysfs", "sysfs", str(tmp_dir / "sys")])
             if res.returncode != 0:
                 error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
-                subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-                subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+                subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
+                subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
 
-        res_k = subprocess.run(f"ls {tmp_dir / 'boot' / 'config-*'}", shell=True, capture_output=True, text=True)
-        if res_k.returncode != 0:
+        config_files = list((tmp_dir / "boot").glob("config-*"))
+        if not config_files:
             error("Failed to find /boot/config-*")
-            subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
-            subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
+            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
+            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
             return
 
-        kver = res_k.stdout.strip().split("config-")[1].splitlines()[0]
+        kver = config_files[0].name.split("config-", 1)[1]
 
         with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
-            res = subprocess.run(f"{need_sudo} chroot {tmp_dir} dracut -f --kver {kver}", shell=True)
+            res = subprocess.run(sudo_prefix + ["chroot", str(tmp_dir), "dracut", "-f", "--kver", kver])
 
         if res.returncode != 0:
             error("Failed to run dracut -f inside chroot")
-            subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
-            subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
-            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
+            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
+            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
             return
 
-        res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'sys'}", shell=True)
+        res = subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
         if res.returncode != 0:
             fatal(f"Failed to umount {tmp_dir / 'sys'}")
 
-        res = subprocess.run(f"{need_sudo} umount {tmp_dir / 'proc'}", shell=True)
+        res = subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
         if res.returncode != 0:
             fatal(f"Failed to umount {tmp_dir / 'proc'}")
 
-        res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
+        res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
         if res.returncode != 0:
             fatal("Failed to remove old version of os: {target}")
 
-        res = subprocess.run(f"{need_sudo} mkdir -p {pathlib.Path(config.MAMA_PATH) / 'os' / arch}", shell=True)
+        res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(pathlib.Path(config.MAMA_PATH) / "os" / arch)])
         if res.returncode != 0:
             fatal("Failed to create target directory")
 
         out("Moving OS into place")
-        res = subprocess.run(f"{need_sudo} mv {tmp_dir} {target}", shell=True)
+        res = subprocess.run(sudo_prefix + ["mv", str(tmp_dir), str(target)])
         if res.returncode != 0:
             error("Failed to store new os build")
-            subprocess.run(f"{need_sudo} rm -Rf {tmp_dir}", shell=True)
+            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
             return
 
-        res = subprocess.run(f"{need_sudo} chmod 644 {target / 'boot' / 'initrd-*'}", shell=True)
-        if res.returncode != 0:
-            fatal("Failed to change permission on initrd")
+        initrd_files = list((target / "boot").glob("initrd-*"))
+        if initrd_files:
+            chmod_args = [str(f) for f in initrd_files]
+            res = subprocess.run(sudo_prefix + ["chmod", "644"] + chmod_args)
+            if res.returncode != 0:
+                fatal("Failed to change permission on initrd")
 
         auth_keys = pathlib.Path(config.MAMA_PATH) / "authorized_keys"
-        res = subprocess.run(
-            f"{need_sudo} mkdir -p {target / 'root' / '.ssh'} && {need_sudo} cp {auth_keys} {target / 'root' / '.ssh/'}",
-            shell=True,
-        )
-        if res.returncode != 0:
-            fatal("Failed to copy authorized_keys")
+        res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(target / "root" / ".ssh")])
+        if res.returncode == 0 and auth_keys.exists():
+            res = subprocess.run(sudo_prefix + ["cp", str(auth_keys), str(target / "root" / ".ssh/")])
+            if res.returncode != 0:
+                fatal("Failed to copy authorized_keys")
 
     out("OS build completed")

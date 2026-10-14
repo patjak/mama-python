@@ -284,8 +284,11 @@ class Job:
             if context == "MAMA":
                 self.debug(f"(mama) {line}")
                 logfile = getattr(Log, "logfile", False)
-                log_str = f" &>> {logfile}" if logfile else ""
-                res = subprocess.run(f"{line}{log_str}", shell=True)
+                if logfile:
+                    with open(logfile, "a", encoding="utf-8") as lf:
+                        res = subprocess.run(line, shell=True, stdout=lf, stderr=subprocess.STDOUT)
+                else:
+                    res = subprocess.run(line, shell=True)
 
                 if res.returncode != 0:
                     self.error(f"EXECUTION FAILED: {line}")

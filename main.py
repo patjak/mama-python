@@ -350,13 +350,15 @@ def cmd_new() -> None:
         only_vm=only_vm,
     )
 
-    if not Util.is_root():
-        out("You must be root to run this command")
-
     path = pathlib.Path(config.MAMA_PATH) / "machines" / name
-    subprocess.run(f"sudo mkdir -p {path}", shell=True)
-    subprocess.run(f"sudo touch {path / 'lock'}", shell=True)
-    subprocess.run(f"sudo chmod 666 {path / 'lock'}", shell=True)
+    if Util.is_root():
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "lock").touch(mode=0o666, exist_ok=True)
+        (path / "lock").chmod(0o666)
+    else:
+        subprocess.run(["sudo", "mkdir", "-p", str(path)])
+        subprocess.run(["sudo", "touch", str(path / "lock")])
+        subprocess.run(["sudo", "chmod", "666", str(path / "lock")])
 
     MachineRepository.add_machine(m)
     out("New machine created")
@@ -541,9 +543,6 @@ def cmd_job_run(
 
 
 def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = None) -> None:
-    if not Util.is_root():
-        out("You must be root to run this command")
-
     if not name:
         name = os_name
 
@@ -559,20 +558,20 @@ def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = 
 
     src = pathlib.Path(config.MAMA_PATH) / "os" / arch / os_name
     dst = pathlib.Path(config.MAMA_PATH) / "machines" / machine / arch / name
-    need_sudo = "" if Util.is_root() else "sudo"
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
 
     with Os.lock(arch, os_name, shared=True), mach.lock():
-        res = subprocess.run(f"{need_sudo} rm -Rf {dst}", shell=True)
+        res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(dst)])
         if res.returncode != 0:
             fatal("Failed to remove previous installation of the OS")
 
-        res = subprocess.run(f"{need_sudo} mkdir -p {dst.parent}", shell=True)
+        res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(dst.parent)])
         if res.returncode != 0:
             fatal(f"Failed to create directory {dst}")
 
         console = Console()
         with console.status(f"[bold cyan]Installing OS template {arch}/{os_name} to machine {machine}...[/bold cyan]"):
-            res = subprocess.run(f"{need_sudo} cp -r --reflink=auto {src} {dst}", shell=True)
+            res = subprocess.run(sudo_prefix + ["cp", "-r", "--reflink=auto", str(src), str(dst)])
 
         if res.returncode != 0:
             fatal("Failed to copy new OS to destination")
@@ -581,10 +580,6 @@ def cmd_install_os(machine: str, arch: str, os_name: str, name: Optional[str] = 
 
 
 def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
-    need_sudo = "" if Util.is_root() else "sudo"
-    if not Util.is_root():
-        out("You must be root to run this command")
-
     mach = select_machine(machine)
     if not isinstance(mach, Machine):
         fatal("Invalid machine name")
@@ -595,8 +590,9 @@ def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
         fatal("OS isn't installed and cannot be deleted")
 
     target = pathlib.Path(config.MAMA_PATH) / "machines" / machine / arch / os_name
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
     with mach.lock():
-        res = subprocess.run(f"{need_sudo} rm -Rf {target}", shell=True)
+        res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
         if res.returncode != 0:
             fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
 
@@ -608,11 +604,6 @@ def cmd_copy_os(
     dst_machine_name: str,
     no_overwrite: bool = False,
 ) -> None:
-    if not Util.is_root():
-        error("You must be root to run this command")
-
-    need_sudo = "" if Util.is_root() else "sudo"
-
     src_mach = Machine.get_by_name(src_machine_name)
     if not src_mach:
         fatal(f"Couldn't find machine with name {src_machine_name}")
@@ -631,18 +622,19 @@ def cmd_copy_os(
         return
 
     first_mach, second_mach = sorted([src_mach, dst_mach], key=lambda m: m.name)
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
 
     with first_mach.lock(), second_mach.lock():
         out(f"Copying os {arch}/{os_name} from {src_mach.name} to {dst_mach.name}")
         src_dir = pathlib.Path(config.MAMA_PATH) / "machines" / src_mach.name / arch / os_name
         dst_arch_dir = pathlib.Path(config.MAMA_PATH) / "machines" / dst_mach.name / arch / ""
 
-        subprocess.run(f"{need_sudo} rm -Rf {dst_os_dir}", shell=True)
-        subprocess.run(f"{need_sudo} mkdir -p {dst_os_dir}", shell=True)
+        subprocess.run(sudo_prefix + ["rm", "-Rf", str(dst_os_dir)])
+        subprocess.run(sudo_prefix + ["mkdir", "-p", str(dst_os_dir)])
 
         console = Console()
         with console.status(f"[bold cyan]Copying OS {arch}/{os_name} from {src_mach.name} to {dst_mach.name}...[/bold cyan]"):
-            subprocess.run(f"{need_sudo} cp -r --reflink=auto {src_dir} {dst_arch_dir}", shell=True)
+            subprocess.run(sudo_prefix + ["cp", "-r", "--reflink=auto", str(src_dir), str(dst_arch_dir)])
 
 
 def cmd_delete(arg: Union[str, bool]) -> None:
@@ -655,7 +647,7 @@ def cmd_delete(arg: Union[str, bool]) -> None:
         MachineRepository.delete_machine(mach)
         path = pathlib.Path(config.MAMA_PATH) / "machines" / name
         if Util.is_root():
-            subprocess.run(f"rm -Rf {path}", shell=True)
+            subprocess.run(["rm", "-Rf", str(path)])
         else:
             error(f"You're not root! You must manually delete installed OSes at {path}")
 
@@ -693,8 +685,8 @@ def cmd_log(
             error(f"No VM log for {mach.name} exists at {log_file}")
             return
 
-        cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
-        subprocess.run(cmd, shell=True)
+        cmd = ["tail", "-f", str(log_file)] if follow else ["cat", str(log_file)]
+        subprocess.run(cmd)
     else:
         arg_name = str(arg) if isinstance(arg, str) and arg else "mama-log"
         log_dir = pathlib.Path(config.MAMA_PATH) / "log"
@@ -718,8 +710,8 @@ def cmd_log(
             error(f"No log for {arg_name} exists at {log_file}")
             return
 
-        cmd = f"tail -f {log_file}" if follow else f"cat {log_file}"
-        subprocess.run(cmd, shell=True)
+        cmd = ["tail", "-f", str(log_file)] if follow else ["cat", str(log_file)]
+        subprocess.run(cmd)
 
 
 def cmd_start(arg: Union[str, bool]) -> None:
@@ -764,10 +756,8 @@ def cmd_connect(arg: Union[str, bool]) -> None:
 
         ssh_cmd = [
             "ssh",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=no",
             f"root@{ip}",
         ]
         try:

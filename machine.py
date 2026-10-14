@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import os
 import pathlib
+import shlex
 import signal
 import socket
 import subprocess
@@ -420,8 +421,11 @@ class Machine:
         else:
             self.set_ip(ip)
 
-        cmd = f"ping -w 3 -c 1 {ip}"
-        res = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(
+            ["ping", "-w", "3", "-c", "1", ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         if res.returncode == 0:
             if self.get_ssh_status() == "open":
                 return "online"
@@ -565,12 +569,12 @@ class Machine:
                     val_str = name
 
         if val_str in kernels or val_str == "":
-            if not Util.is_root():
-                out("You must be root to run this command")
-
             initrd = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / self.os / "boot" / f"initrd-{val_str}"
             if initrd.exists():
-                subprocess.run(f"sudo chmod 644 {initrd}", shell=True)
+                if Util.is_root():
+                    initrd.chmod(0o644)
+                else:
+                    subprocess.run(["sudo", "chmod", "644", str(initrd)])
 
             self.kernel = val_str
             MachineRepository.update_fields(self.name, {"kernel": val_str})
@@ -840,7 +844,7 @@ class Machine:
         except ProcessLookupError:
             pass
         except PermissionError:
-            subprocess.run(f"sudo kill {pid}", shell=True)
+            subprocess.run(["sudo", "kill", str(pid)])
 
         for _ in range(10):
             try:
@@ -854,13 +858,13 @@ class Machine:
             except ProcessLookupError:
                 pass
             except PermissionError:
-                subprocess.run(f"sudo kill -9 {pid}", shell=True)
+                subprocess.run(["sudo", "kill", "-9", str(pid)])
 
         pid_file = self.get_vmpid_path()
         try:
             pid_file.unlink(missing_ok=True)
         except OSError:
-            subprocess.run(f"sudo rm -f {pid_file}", shell=True)
+            subprocess.run(["sudo", "rm", "-f", str(pid_file)])
 
         return True
 
@@ -877,8 +881,12 @@ class Machine:
 
         try:
             vmlog_path.parent.mkdir(parents=True, exist_ok=True)
-            need_sudo = "" if Util.is_root() else "sudo"
-            subprocess.run(f"{need_sudo} touch {vmlog_path} && {need_sudo} chmod 666 {vmlog_path}", shell=True)
+            if Util.is_root():
+                vmlog_path.touch(mode=0o666, exist_ok=True)
+                vmlog_path.chmod(0o666)
+            else:
+                subprocess.run(["sudo", "touch", str(vmlog_path)])
+                subprocess.run(["sudo", "chmod", "666", str(vmlog_path)])
             with open(vmlog_path, "w") as f:
                 pass
         except Exception as e:
@@ -895,18 +903,9 @@ class Machine:
 
         self.out(f"Starting virtual machine with OS {self.os} and kernel {self.kernel}")
 
-        try:
-            num_cores = int(subprocess.check_output("nproc", shell=True).strip())
-        except Exception:
-            num_cores = 1
-
-        cores_str = f"-smp {num_cores}"
-        sys_str = f"-m {1024 * 44}"
-        net_str = f"-net nic,model=virtio,macaddr={self.mac} -net bridge,br=br0"
+        num_cores = os.cpu_count() or 1
         os_arch = self.os.split("/")[0] if "/" in self.os else self.os
-
-        mama_arch = subprocess.check_output("uname -p", shell=True, text=True).strip()
-        kvm_str = ""
+        mama_arch = subprocess.check_output(["uname", "-p"], text=True).strip()
 
         if os_arch == "aarch64":
             kernel_filename = f"Image-{self.kernel}"
@@ -919,35 +918,59 @@ class Machine:
         kernel = os.path.join(self.get_kernel_path(), kernel_filename)
         initrd = os.path.join(self.get_kernel_path(), initrd_filename)
 
-        if os_arch == "i686":
-            arch = "x86_64"
-        elif os_arch == "aarch64":
-            arch = "aarch64"
-            sys_str += " -machine virt,gic-version=3 -cpu cortex-a72 -accel tcg,thread=multi,tb-size=1024 -bios /usr/share/qemu/qemu-uefi-aarch64.bin"
-        elif os_arch == "ppc64le":
-            arch = "ppc64"
-            sys_str += " -M pseries"
-        else:
-            arch = "x86_64"
-            sys_str += " -cpu host"
+        arch = "x86_64" if os_arch == "i686" else os_arch
 
-        net_str += (
-            f' -kernel {kernel} -initrd {initrd} -append "{self.boot_params} '
-            f'ip=dhcp rd.neednet=1 ifname=lan0:{self.mac} systemd.hostname={self.name} '
-            f'root=nfs:{config.MAMA_HOST}:/machines/{self.name}/{self.os},rw,vers=4,nconnect=16 '
-            f'console=ttyS0 console=tty"'
-        )
+        qemu_cmd = []
+        if not Util.is_root():
+            qemu_cmd.append("sudo")
+        qemu_cmd.append(f"qemu-system-{arch}")
+
+        qemu_cmd.extend([
+            "-daemonize",
+            "-pidfile", str(pid_path),
+            "-smp", str(num_cores),
+            "-m", str(1024 * 44),
+            "-net", f"nic,model=virtio,macaddr={self.mac}",
+            "-net", "bridge,br=br0",
+            "-nographic",
+            "-chardev", f"file,id=char0,path={vmlog_path}",
+            "-serial", "chardev:char0",
+            "-monitor", "none",
+        ])
+
+        if os_arch == "aarch64":
+            qemu_cmd.extend([
+                "-machine", "virt,gic-version=3",
+                "-cpu", "cortex-a72",
+                "-accel", "tcg,thread=multi,tb-size=1024",
+                "-bios", "/usr/share/qemu/qemu-uefi-aarch64.bin",
+            ])
+        elif os_arch == "ppc64le":
+            qemu_cmd.extend(["-M", "pseries"])
+        else:
+            qemu_cmd.extend(["-cpu", "host"])
+
+        append_params = (
+            f"{self.boot_params} ip=dhcp rd.neednet=1 ifname=lan0:{self.mac} "
+            f"systemd.hostname={self.name} "
+            f"root=nfs:{config.MAMA_HOST}:/machines/{self.name}/{self.os},rw,vers=4,nconnect=16 "
+            f"console=ttyS0 console=tty"
+        ).strip()
+
+        qemu_cmd.extend([
+            "-kernel", kernel,
+            "-initrd", initrd,
+            "-append", append_params,
+        ])
 
         if arch == mama_arch:
-            kvm_str = "-enable-kvm"
+            qemu_cmd.append("-enable-kvm")
 
-        need_sudo = "" if Util.is_root() else "sudo "
-        cmd = (
-            f"{need_sudo}qemu-system-{arch} -daemonize -pidfile {pid_path} {sys_str} {kvm_str} {cores_str} {net_str} "
-            f"-nographic -chardev file,id=char0,path={vmlog_path} -serial chardev:char0 -monitor none {self.vm_params}"
-        )
-        self.debug(cmd)
-        subprocess.run(cmd, shell=True)
+        if self.vm_params:
+            qemu_cmd.extend(shlex.split(self.vm_params))
+
+        self.debug(shlex.join(qemu_cmd))
+        subprocess.run(qemu_cmd)
 
         time.sleep(3)
 
@@ -1035,15 +1058,17 @@ class Machine:
         if ancestor_pid_int == pid_int:
             return True
 
-        cmd = f"ps -p {pid_int} -o ppid="
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if res.returncode != 0:
-            fatal(f"Failed to look for ancestor with ps: pid={pid_int}")
-
         try:
-            parent_pid = int(res.stdout.strip())
-        except (ValueError, TypeError):
-            parent_pid = 0
+            with open(f"/proc/{pid_int}/stat", "r", encoding="utf-8") as f:
+                parent_pid = int(f.read().split()[3])
+        except (OSError, IndexError, ValueError):
+            res = subprocess.run(["ps", "-p", str(pid_int), "-o", "ppid="], capture_output=True, text=True)
+            if res.returncode != 0:
+                fatal(f"Failed to look for ancestor with ps: pid={pid_int}")
+            try:
+                parent_pid = int(res.stdout.strip())
+            except (ValueError, TypeError):
+                parent_pid = 0
 
         if parent_pid == 0:
             return False
@@ -1080,27 +1105,38 @@ class Machine:
                 self.load()
 
     def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
-        timeout_str = "" if no_timeout else f"timeout --foreground {self.ssh_cmd_timeout}m"
-
-        if self.wait_for_status("online", 30, dont_print=True):
-            self.debug(f"ssh: {cmd}")
-            logfile = getattr(Log, "logfile", False)
-            log_str = f" &>> {logfile}" if logfile else ""
-
-            cmd_escaped = cmd.replace("$", "\\$")
-            ip = self.get_ip()
-
-            full_cmd = (
-                f'{timeout_str} ssh -q -o "UserKnownHostsFile=/dev/null" '
-                f'-o "ConnectTimeout=10" -o "StrictHostKeyChecking=no" '
-                f'root@{ip} -t "{cmd_escaped}"{log_str}'
-            )
-
-            res = subprocess.run(full_cmd, shell=True)
-            return res.returncode
-        else:
+        if not self.wait_for_status("online", 30, dont_print=True):
             self.error("Unable to execute ssh cmd since machine is not online.")
             return False
+
+        self.debug(f"ssh: {cmd}")
+        ip = self.get_ip()
+        if not ip:
+            self.error("No IP address available to execute ssh cmd.")
+            return False
+
+        ssh_args = [
+            "ssh",
+            "-q",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=no",
+            f"root@{ip}",
+            "-t",
+            cmd,
+        ]
+
+        if not no_timeout:
+            ssh_args = ["timeout", "--foreground", f"{self.ssh_cmd_timeout}m"] + ssh_args
+
+        logfile = getattr(Log, "logfile", False)
+        if logfile:
+            with open(logfile, "a", encoding="utf-8") as lf:
+                res = subprocess.run(ssh_args, stdout=lf, stderr=subprocess.STDOUT)
+        else:
+            res = subprocess.run(ssh_args)
+
+        return res.returncode
 
     def reserve(self, user: str) -> None:
         self.reservation = user
