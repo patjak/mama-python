@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import getpass
+import logging
 import os
 import pathlib
 import subprocess
@@ -1263,6 +1264,9 @@ def main() -> None:
     config.DEBUG = parsed_args.debug
     config.DEBUG_LOCK = parsed_args.debug_lock
     config.DEBUG_PID = parsed_args.debug_pid
+
+    if parsed_args.debug:
+        Log.set_level(logging.DEBUG)
 
     db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
     if MachineRepository.load() is False:
