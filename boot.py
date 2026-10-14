@@ -84,11 +84,13 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         # Exclude /boot.py so dynamic iPXE script handling is never bypassed
         if clean_path != "boot.py" and is_safe and target_file.exists() and target_file.is_file():
+            mach_name = ""
+            client_mac = ""
+            fname = target_file.name
             try:
                 parts = pathlib.Path(clean_path).parts
                 if len(parts) >= 2 and parts[0] == "machines":
                     mach_name = parts[1]
-                    fname = target_file.name
                     if fname.startswith("initrd"):
                         Machine.set_state_by_name(mach_name, "fetching-initrd")
                     elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
@@ -99,7 +101,6 @@ class iPXEHandler(BaseHTTPRequestHandler):
                     client_ip = self.client_address[0]
                     client_mac = clean_mac(get_mac_from_ip(client_ip))
                     if client_mac:
-                        fname = target_file.name
                         if fname.startswith("initrd"):
                             Machine.set_state_by_mac(client_mac, "fetching-initrd")
                         elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
@@ -110,6 +111,17 @@ class iPXEHandler(BaseHTTPRequestHandler):
                 sys.stderr.write(f"[boot.py] Error updating state for static file transfer: {e}\n")
 
             self._send_file(target_file)
+
+            # Transition state to 'booting' once kernel / initrd file transfer finishes
+            if fname.startswith(("initrd", "vmlinuz", "Image", "vmlinux")):
+                try:
+                    if mach_name:
+                        Machine.set_state_by_name(mach_name, "booting")
+                    elif client_mac:
+                        Machine.set_state_by_mac(client_mac, "booting")
+                except Exception as e:
+                    sys.stderr.write(f"[boot.py] Error updating state to booting: {e}\n")
+
             return
 
         params = urllib.parse.parse_qs(parsed_url.query)

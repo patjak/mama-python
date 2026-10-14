@@ -509,6 +509,9 @@ class Machine:
 
         if dont_print:
             while self.get_state() != target_state:
+                curr_state = self.get_state()
+                if target_state == "online" and curr_state == "boot-failed":
+                    return False
                 time_passed = time.time() - start_time
                 time.sleep(1)
                 if seconds_int > 0 and time_passed >= seconds_int:
@@ -521,6 +524,10 @@ class Machine:
                 curr_state = self.get_state()
                 if curr_state == target_state:
                     break
+
+                if target_state == "online" and curr_state == "boot-failed":
+                    self.error(f"({self.name}) Boot sequence failed.")
+                    return False
 
                 time_passed = time.time() - start_time
                 if seconds_int > 0 and time_passed >= seconds_int:
@@ -965,6 +972,14 @@ class Machine:
         if not Util.is_root():
             self.out("You must be root to start a VM")
 
+        if not self.os:
+            self.error("No OS has been configured!")
+            return False
+
+        if not self.kernel and not self.os.endswith("/NONE"):
+            self.error("No kernel set for machine")
+            return False
+
         if self.get_vm_pid() is not None:
             self.error("Failed to start VM. Already running.")
             return False
@@ -1077,6 +1092,9 @@ class Machine:
             self.set_state("boot-failed")
             self.clear()
             return False
+
+        # QEMU daemon is running; transition to booting stage
+        self.set_state("booting")
 
         effective_timeout = MachineRepository.get_calculated_start_timeout(
             self.name, self.os, "vm", default_timeout=self.start_timeout
