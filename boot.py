@@ -29,16 +29,26 @@ def clean_mac(mac_str: str) -> str:
 
 
 def get_mac_from_ip(client_ip: str) -> str:
-    """Extract client MAC address from DHCP leases or neighbor ARP table given client IP."""
+    """Extract client MAC address from DHCP leases, MachineRepository, or neighbor ARP table."""
     if not client_ip:
         return ""
 
+    # 1. Check active dnsmasq DHCP leases
     if getattr(config, "DHCP_ENABLED", True):
         leases = DnsmasqManager.get_active_leases()
         for mac, ip in leases.items():
             if ip == client_ip:
                 return clean_mac(mac)
 
+    # 2. Check registered machines in MAMA database
+    try:
+        for m in MachineRepository.get_all():
+            if m.get("ip") == client_ip and m.get("mac"):
+                return clean_mac(m.get("mac"))
+    except Exception:
+        pass
+
+    # 3. Fallback to neighbor ARP table
     try:
         cmd = f"ip -4 neigh | grep {client_ip}"
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -65,7 +75,7 @@ class TFTPServer:
     def start(self) -> threading.Thread | None:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SOL_REUSEADDR, 1)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.sock.bind((self.host, self.port))
             self._running = True
             sys.stderr.write(f"[boot.py] Starting MAMA TFTP Server on udp://{self.host}:{self.port}...\n")
@@ -150,8 +160,8 @@ class TFTPServer:
                     Machine.set_state_by_mac(client_mac, f"tftp-pxe-boot ({raw_filename})")
                 else:
                     Machine.set_state_by_mac(client_mac, f"tftp-fetching ({raw_filename})")
-        except Exception:
-            pass
+        except Exception as e:
+            sys.stderr.write(f"[boot.py] [TFTP] Failed to update state for {client_addr[0]}: {e}\n")
 
         # Clarify probe vs transfer in log output
         if options.get("tsize") == "0":
@@ -311,28 +321,32 @@ class iPXEHandler(BaseHTTPRequestHandler):
         except ValueError:
             is_safe = False
 
-        if is_safe and target_file.exists() and target_file.is_file():
-            parts = pathlib.Path(clean_path).parts
-            if len(parts) >= 2 and parts[0] == "machines":
-                mach_name = parts[1]
-                fname = target_file.name
-                if fname.startswith("initrd"):
-                    Machine.set_state_by_name(mach_name, "fetching-initrd")
-                elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
-                    Machine.set_state_by_name(mach_name, "fetching-kernel")
-                else:
-                    Machine.set_state_by_name(mach_name, f"fetching-{fname}")
-            else:
-                client_ip = self.client_address[0]
-                client_mac = clean_mac(get_mac_from_ip(client_ip))
-                if client_mac:
+        # Exclude /boot.py so dynamic iPXE script handling is never bypassed
+        if clean_path != "boot.py" and is_safe and target_file.exists() and target_file.is_file():
+            try:
+                parts = pathlib.Path(clean_path).parts
+                if len(parts) >= 2 and parts[0] == "machines":
+                    mach_name = parts[1]
                     fname = target_file.name
                     if fname.startswith("initrd"):
-                        Machine.set_state_by_mac(client_mac, "fetching-initrd")
+                        Machine.set_state_by_name(mach_name, "fetching-initrd")
                     elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
-                        Machine.set_state_by_mac(client_mac, "fetching-kernel")
+                        Machine.set_state_by_name(mach_name, "fetching-kernel")
                     else:
-                        Machine.set_state_by_mac(client_mac, f"fetching-{fname}")
+                        Machine.set_state_by_name(mach_name, f"fetching-{fname}")
+                else:
+                    client_ip = self.client_address[0]
+                    client_mac = clean_mac(get_mac_from_ip(client_ip))
+                    if client_mac:
+                        fname = target_file.name
+                        if fname.startswith("initrd"):
+                            Machine.set_state_by_mac(client_mac, "fetching-initrd")
+                        elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
+                            Machine.set_state_by_mac(client_mac, "fetching-kernel")
+                        else:
+                            Machine.set_state_by_mac(client_mac, f"fetching-{fname}")
+            except Exception as e:
+                sys.stderr.write(f"[boot.py] Error updating state for static file transfer: {e}\n")
 
             self._send_file(target_file)
             return
@@ -363,8 +377,12 @@ class iPXEHandler(BaseHTTPRequestHandler):
             self._send_response(200, response)
             return
 
-        # Track that the machine has reached the HTTP iPXE boot phase
-        Machine.set_state_by_mac(mac, "ipxe-boot-config")
+        # Track that machine requested its iPXE config
+        try:
+            Machine.set_state_by_mac(mac, "ipxe-boot-config")
+        except Exception as e:
+            sys.stderr.write(f"[boot.py] Error setting state for MAC {mac}: {e}\n")
+
         MachineRepository.load()
 
         try:
@@ -432,6 +450,9 @@ def main() -> None:
     bind_addr = os.environ.get("BIND_ADDR", config.MAMA_HOST)
 
     mama_base = pathlib.Path(config.MAMA_PATH).resolve()
+
+    # Initialize repository database on server startup
+    MachineRepository.load()
 
     # Automatically write autoexec.ipxe on startup
     generate_autoexec_ipxe(mama_base, bind_addr, port)
