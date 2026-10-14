@@ -6,8 +6,7 @@ DB_FILE: str = f"{MAMA_PATH}/mama.db"
 
 # Network Configuration
 MAMA_HOST: str = "192.168.2.1"
-TFTP_PORT: int = 69
-TFTP_DIR: str = f"{MAMA_PATH}/tftp"
+TFTP_DIR: str = f"{MAMA_PATH}/tftp"  # Root directory served by dnsmasq TFTP
 
 # DHCP & dnsmasq Configuration (openSUSE)
 DHCP_ENABLED: bool = True
