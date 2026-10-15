@@ -15,6 +15,7 @@ import config
 from dhcp import DnsmasqManager
 from machine import Machine
 import net_mgr
+from nfs import NfsManager
 from repository import MachineRepository
 
 
@@ -164,6 +165,10 @@ def main() -> None:
         DnsmasqManager.sync_leases_to_db()
     else:
         DnsmasqManager.generate_autoexec_ipxe()
+
+    if getattr(config, "NFS_ENABLED", True):
+        sys.stderr.write("[boot.py] Synchronizing NFS server exports...\n")
+        NfsManager.reload_or_restart()
 
     print(f"Starting MAMA iPXE Server on http://{bind_addr}:{port}...")
     server = ThreadingHTTPServer((bind_addr, port), iPXEHandler)

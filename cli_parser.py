@@ -93,7 +93,7 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     )
     subparsers = root_parser.add_subparsers(dest="command", help="Available commands", metavar="<command>")
 
-    # Unified list parser
+    # Unified list parser (replaces list, list-os, list-kernel, and list-resources)
     p_list = subparsers.add_parser(
         "list",
         parents=[parent_parser],
@@ -263,5 +263,11 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
     dhcp_sub.add_parser("sync-leases", parents=[parent_parser], help="Sync active DHCP leases to machine database", formatter_class=HELP_FORMATTER)
     dhcp_sub.add_parser("leases", parents=[parent_parser], help="Show active DHCP leases", formatter_class=HELP_FORMATTER)
+
+    p_nfs = subparsers.add_parser("nfs", parents=[parent_parser], help="Manage NFS server exports", formatter_class=HELP_FORMATTER)
+    nfs_sub = p_nfs.add_subparsers(dest="nfs_action", help="NFS action", metavar="<action>")
+    nfs_sub.add_parser("sync", parents=[parent_parser], help="Regenerate exports config and reload nfs-server", formatter_class=HELP_FORMATTER)
+    nfs_sub.add_parser("status", parents=[parent_parser], help="Show NFS server service status and active exports", formatter_class=HELP_FORMATTER)
+    nfs_sub.add_parser("exports", parents=[parent_parser], help="Show active NFS exports", formatter_class=HELP_FORMATTER)
 
     return root_parser

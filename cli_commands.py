@@ -22,6 +22,7 @@ from job import Job
 from job_queue import JobQueue
 from logger import Log, debug, error, fatal, out
 from machine import Machine
+from nfs import NfsManager
 from os_mgr import Arch, Os
 from repository import MachineRepository, Util
 
@@ -141,7 +142,6 @@ def cmd_list(
     fast: bool = False,
 ) -> None:
     """Unified listing handler for machines, OS templates, kernels, and resources."""
-    # Handle backward-compatible positional call: cmd_list(fast)
     if isinstance(item, bool):
         fast = item
         item = "machines"
@@ -924,3 +924,39 @@ def cmd_dhcp(dhcp_action: Optional[str]) -> None:
             console.print(table)
     else:
         out("Unknown or missing DHCP action. See `mama dhcp --help`.")
+
+
+def cmd_nfs(nfs_action: Optional[str]) -> None:
+    if nfs_action == "sync":
+        if NfsManager.reload_or_restart():
+            out("NFS exports synchronized and nfs-server reloaded successfully.")
+        else:
+            fatal("Failed to sync NFS server.")
+    elif nfs_action in ("status", "exports"):
+        console = Console()
+        active = NfsManager.is_active()
+        status_str = "[bold green]Active (running)[/bold green]" if active else "[bold red]Inactive / Stopped[/bold red]"
+        service_name = getattr(config, "NFS_SERVICE_NAME", "nfs-server")
+        console.print(f"NFS Service ({service_name}): {status_str}")
+
+        exports = NfsManager.get_active_exports()
+        if not exports:
+            out("No active NFS exports found.")
+        else:
+            table = Table(
+                title="Active NFS Exports",
+                header_style="bold cyan",
+                border_style="bright_blue",
+            )
+            table.add_column("Export Path", style="bold yellow")
+            table.add_column("Client / Network", style="bold green")
+            table.add_column("Options", style="dim")
+            for item in exports:
+                table.add_row(
+                    item.get("path", "-"),
+                    item.get("client", "-"),
+                    item.get("options", "-"),
+                )
+            console.print(table)
+    else:
+        out("Unknown or missing NFS action. See `mama nfs --help`.")

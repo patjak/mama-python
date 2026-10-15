@@ -18,6 +18,12 @@ DHCP_LEASE_TIME: str = "12h"
 DNSMASQ_CONF_PATH: str = "/etc/dnsmasq.d/mama.conf"
 DNSMASQ_LEASES_FILE: str = "/var/lib/misc/dnsmasq.leases"
 
+# NFS Server Configuration (openSUSE)
+NFS_ENABLED: bool = True
+NFS_SERVICE_NAME: str = "nfs-server"
+NFS_EXPORTS_PATH: str = "/etc/exports.d/mama.exports"
+NFS_OPTIONS: str = "rw,async,no_root_squash,no_subtree_check,fsid=0"
+
 # Debug Flags
 DEBUG: bool = False
 DEBUG_LOCK: bool = False

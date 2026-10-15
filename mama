@@ -198,6 +198,9 @@ def main() -> None:
     elif args.command == "dhcp":
         cli_commands.cmd_dhcp(dhcp_action=args.dhcp_action)
 
+    elif args.command == "nfs":
+        cli_commands.cmd_nfs(nfs_action=args.nfs_action)
+
 
 if __name__ == "__main__":
     try:
