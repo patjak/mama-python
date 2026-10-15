@@ -93,22 +93,32 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     )
     subparsers = root_parser.add_subparsers(dest="command", help="Available commands", metavar="<command>")
 
-    p_list = subparsers.add_parser("list", parents=[parent_parser], help="List configured machines", formatter_class=HELP_FORMATTER)
-    p_list.add_argument("--fast", action="store_true", help="Skip querying power data for faster refresh")
+    # Unified list parser
+    p_list = subparsers.add_parser(
+        "list",
+        parents=[parent_parser],
+        help="List machines, OS templates, kernels, or resources",
+        formatter_class=HELP_FORMATTER,
+    )
+    p_list.add_argument(
+        "item",
+        nargs="?",
+        default="machines",
+        choices=["machines", "os", "kernels", "kernel", "resources"],
+        help="Entity type to list: machines (default), os, kernels, resources",
+    )
+    p_list_target = p_list.add_argument(
+        "target",
+        nargs="?",
+        default=False,
+        help="Target machine name (optional for 'os', prompted if omitted for 'kernels')",
+    )
+    p_list_target.completer = machine_completer
+    p_list.add_argument("--fast", action="store_true", help="Skip querying power data for faster refresh (machines only)")
 
     p_queue = subparsers.add_parser("queue", parents=[parent_parser], help="View queued waiting jobs", formatter_class=HELP_FORMATTER)
     p_queue_mach = p_queue.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_queue_mach.completer = machine_completer
-
-    p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes", formatter_class=HELP_FORMATTER)
-    p_list_os_mach = p_list_os.add_argument("machine", nargs="?", default=False, help="Target machine")
-    p_list_os_mach.completer = machine_completer
-
-    p_list_kernel = subparsers.add_parser("list-kernel", parents=[parent_parser], help="List available kernels", formatter_class=HELP_FORMATTER)
-    p_list_kernel_mach = p_list_kernel.add_argument("machine", help="Target machine")
-    p_list_kernel_mach.completer = machine_completer
-
-    subparsers.add_parser("list-resources", parents=[parent_parser], help="List all resources", formatter_class=HELP_FORMATTER)
 
     p_log = subparsers.add_parser("log", parents=[parent_parser], help="View, follow, or clear logs", formatter_class=HELP_FORMATTER)
     p_log_mach = p_log.add_argument("machine", nargs="?", default=False, help="Target machine (defaults to mama-log)")
@@ -234,6 +244,7 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_wait = subparsers.add_parser("wait", parents=[parent_parser], help="Wait for machine availability", formatter_class=HELP_FORMATTER)
     p_wait_mach = p_wait.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_wait_mach.completer = machine_completer
+    p_wait.add_argument("reason", nargs="?", default="wait", help="Optional description of what is waiting")
 
     subparsers.add_parser("serve", parents=[parent_parser], help="Start iPXE boot server", formatter_class=HELP_FORMATTER)
 

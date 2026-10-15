@@ -916,7 +916,7 @@ class Machine:
 
         return True
 
-    def wait(self) -> None:
+    def wait(self, reason: str = "wait") -> None:
         self.load()
         if not self.is_idle():
             started_str = "yes" if self.is_started else "no"
@@ -926,7 +926,7 @@ class Machine:
 
         console = Console()
         try:
-            queue_ctx = JobQueue.track(self.name, f"wait (PID {os.getpid()})")
+            queue_ctx = JobQueue.track(self.name, reason)
         except Exception:
             queue_ctx = contextlib.nullcontext()
 

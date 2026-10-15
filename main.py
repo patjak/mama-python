@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from bootinfo import bootinfo
 from cli_commands import (
     cmd_bootinfo,
     cmd_clear,
@@ -33,11 +34,24 @@ from cli_commands import (
     cmd_start_vm,
     cmd_stop,
     cmd_wait,
+    list_kernels,
+    select_kernel,
+    select_machine,
+    select_os,
 )
 from cli_parser import HAS_ARGCOMPLETE, setup_cli_parser
 import config
 from logger import Log, fatal
 from repository import MachineRepository
+
+__all__ = [
+    "main",
+    "select_machine",
+    "select_os",
+    "select_kernel",
+    "list_kernels",
+    "bootinfo",
+]
 
 
 def main() -> None:
@@ -150,7 +164,7 @@ def main() -> None:
     elif cmd == "release":
         cmd_release(parsed_args.machine, force=parsed_args.force)
     elif cmd == "wait":
-        cmd_wait(parsed_args.machine)
+        cmd_wait(parsed_args.machine, getattr(parsed_args, "reason", "wait"))
     elif cmd == "serve":
         cmd_serve()
     elif cmd == "ipxe":

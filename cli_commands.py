@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 import sys
 import time
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import questionary
 from rich.console import Console
@@ -135,7 +135,40 @@ def select_kernel(mach: Machine) -> str:
     return selected_kernel
 
 
-def cmd_list(fast: bool = False) -> None:
+def cmd_list(
+    item: Union[str, bool, None] = "machines",
+    target: Union[str, bool, None] = False,
+    fast: bool = False,
+) -> None:
+    """Unified listing handler for machines, OS templates, kernels, and resources."""
+    # Handle backward-compatible positional call: cmd_list(fast)
+    if isinstance(item, bool):
+        fast = item
+        item = "machines"
+
+    item_str = str(item).lower() if item else "machines"
+
+    if item_str == "os":
+        cmd_list_os(m=target)
+        return
+
+    if item_str in ("kernels", "kernel"):
+        if not target:
+            mach = select_machine()
+            if not isinstance(mach, Machine):
+                return
+            target = mach.name
+        cmd_list_kernel(str(target))
+        return
+
+    if item_str in ("resources", "resource", "res"):
+        cmd_list_resources()
+        return
+
+    if item_str not in ("machines", "machine"):
+        error(f"Unknown list target '{item}'. Choose from: machines, os, kernels, resources.")
+        return
+
     if getattr(config, "DHCP_ENABLED", True):
         try:
             DnsmasqManager.sync_leases_to_db()
@@ -346,7 +379,7 @@ def cmd_new() -> None:
         DnsmasqManager.reload_or_restart()
 
 
-def cmd_list_os(m: Union[str, bool] = False) -> None:
+def cmd_list_os(m: Union[str, bool, None] = False) -> None:
     console = Console()
     if m:
         mach = select_machine(m)
@@ -775,10 +808,10 @@ def cmd_release(arg: Union[str, bool, None] = False, force: bool = False) -> Non
         out(f"Released reservation for machine '{mach.name}'.")
 
 
-def cmd_wait(arg: Union[str, bool]) -> None:
+def cmd_wait(arg: Union[str, bool], reason: str = "wait") -> None:
     mach = select_machine(arg)
     if isinstance(mach, Machine):
-        mach.wait()
+        mach.wait(reason=reason)
 
 
 def cmd_serve() -> None:
