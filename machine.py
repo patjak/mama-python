@@ -696,6 +696,14 @@ class Machine:
             if self.is_job_stale():
                 table.add_row("Job status", "[bold red]STALE (process not running)[/bold red]")
 
+        try:
+            from job import JobQueue
+            queued = JobQueue.get_queue(self.name)
+            if queued:
+                table.add_row("Queued jobs", f"[bold yellow]{len(queued)} waiting[/bold yellow]")
+        except Exception:
+            pass
+
         console.print(table)
         Log.resume()
 
@@ -807,6 +815,7 @@ class Machine:
             "power": self.get_power,
             "ip": self.get_ip,
             "nfs_mounted": lambda: self.is_nfs_mounted(),
+            "queue": lambda: len(__import__("job").JobQueue.get_queue(self.name)),
             "params": lambda: self.boot_params,
             "vmparams": lambda: self.vm_params,
             "os": lambda: self.os,
@@ -1255,10 +1264,17 @@ class Machine:
             self.out(f"Waiting for machine to become idle ( started: {started_str}{job_str}{pid_str})")
 
         console = Console()
-        while not self.is_idle():
-            with console.status(f"[bold yellow]({self.name}) Waiting for machine to become idle...[/bold yellow]"):
-                time.sleep(10)
-                self.load()
+        try:
+            from job import JobQueue
+            queue_ctx = JobQueue.track(self.name, f"wait (PID {os.getpid()})")
+        except Exception:
+            queue_ctx = contextlib.nullcontext()
+
+        with queue_ctx:
+            while not self.is_idle():
+                with console.status(f"[bold yellow]({self.name}) Waiting for machine to become idle...[/bold yellow]"):
+                    time.sleep(10)
+                    self.load()
 
     def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
         # Fast path: proceed directly if SSH port 22 is already open

@@ -34,7 +34,7 @@ except ImportError:
 from builder import build_os, run_os_build_script
 import config
 from dhcp import DnsmasqManager
-from job import Job
+from job import Job, JobQueue
 from logger import Log, debug, error, fatal, out
 from machine import Machine, to_bool
 from os_mgr import Arch, Os
@@ -296,6 +296,58 @@ def cmd_list(fast: bool = False) -> None:
             data["vm_str"],
             data["job_str"],
         )
+
+    console.print(table)
+
+
+def cmd_queue(arg: Union[str, bool, None] = False) -> None:
+    target_mach: Optional[str] = None
+    if arg:
+        mach = select_machine(arg)
+        if not isinstance(mach, Machine):
+            return
+        target_mach = mach.name
+
+    queue_entries = JobQueue.get_queue(target_mach or "")
+
+    console = Console()
+    table = Table(
+        title=f"Machine Job Queue{': ' + target_mach if target_mach else ' (All Machines)'}",
+        header_style="bold cyan",
+        border_style="bright_blue",
+        title_style="bold white",
+    )
+    table.add_column("Pos", justify="right", style="dim")
+    table.add_column("Machine", style="bold white")
+    table.add_column("Queued Job", style="bold yellow")
+    table.add_column("PID", style="cyan")
+    table.add_column("Waiting Time", justify="right", style="green")
+    table.add_column("Blocking Job", style="italic red")
+
+    now = int(time.time())
+    for pos, item in enumerate(queue_entries, start=1):
+        mach = Machine.get_by_name(item["machine_name"])
+        blocking_str = "-"
+        if mach and mach.job:
+            pid_str = f" (PID {mach.job_pid})" if mach.job_pid else ""
+            blocking_str = f"{mach.job}{pid_str}"
+        elif mach and mach.is_started:
+            blocking_str = f"Machine active (state: {mach.state})"
+
+        waiting_time = format_duration(max(0, now - item["queued_at"]))
+
+        table.add_row(
+            str(pos),
+            item["machine_name"],
+            item["job"],
+            str(item["pid"]),
+            waiting_time,
+            blocking_str,
+        )
+
+    if not queue_entries:
+        out(f"No jobs are currently waiting in the queue{': ' + target_mach if target_mach else ''}.")
+        return
 
     console.print(table)
 
@@ -726,12 +778,14 @@ def cmd_stop(arg: Union[str, bool]) -> None:
 
 def cmd_clear(arg: Union[str, bool]) -> None:
     if arg == "all":
+        JobQueue.clear_machine("all")
         for m in Machine.get_all():
             cmd_clear(m.name)
         return
 
     mach = select_machine(arg)
     if isinstance(mach, Machine):
+        JobQueue.clear_machine(mach.name)
         mach.stop(force=True)
         mach.clear_job()
 
@@ -939,6 +993,10 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_list = subparsers.add_parser("list", parents=[parent_parser], help="List configured machines", formatter_class=HELP_FORMATTER)
     p_list.add_argument("--fast", action="store_true", help="Skip querying power data for faster refresh")
 
+    p_queue = subparsers.add_parser("queue", parents=[parent_parser], help="View queued waiting jobs", formatter_class=HELP_FORMATTER)
+    p_queue_mach = p_queue.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
+    p_queue_mach.completer = machine_completer
+
     p_list_os = subparsers.add_parser("list-os", parents=[parent_parser], help="List available OSes", formatter_class=HELP_FORMATTER)
     p_list_os_mach = p_list_os.add_argument("machine", nargs="?", default=False, help="Target machine")
     p_list_os_mach.completer = machine_completer
@@ -960,6 +1018,7 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_hist_mach = p_hist.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_hist_mach.completer = machine_completer
 
+    # Job subcommands
     job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows", formatter_class=HELP_FORMATTER)
     job_p.add_argument("job_name", help="Job name")
     job_sub = job_p.add_subparsers(dest="job_action", help="Job action", metavar="<action>")
@@ -1123,6 +1182,8 @@ def main() -> None:
 
     if cmd == "list":
         cmd_list(fast=getattr(parsed_args, "fast", False))
+    elif cmd == "queue":
+        cmd_queue(parsed_args.machine)
     elif cmd == "list-os":
         cmd_list_os(parsed_args.machine)
     elif cmd == "list-kernel":
