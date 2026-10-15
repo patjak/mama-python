@@ -6,9 +6,6 @@ import datetime
 import fcntl
 import os
 import pathlib
-import shlex
-import signal
-import socket
 import subprocess
 import time
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
@@ -18,10 +15,13 @@ from rich.console import Console
 from rich.table import Table
 
 import config
+from job_queue import JobQueue
 from logger import Log, debug, error, fatal, out
+import net_mgr
 from os_mgr import Os
 from repository import MachineRepository
 from util import Util
+import vm_mgr
 
 
 def to_bool(val: Any) -> bool:
@@ -35,14 +35,12 @@ def to_bool(val: Any) -> bool:
 
 @dataclass
 class Machine:
-    # Class tunables for machine management
     start_timeout_default: ClassVar[int] = 4 * 60
     stop_timeout_default: ClassVar[int] = 30
     ssh_cmd_timeout: ClassVar[int] = 1 * 60
     power_cycle_delay: ClassVar[int] = 30
     resource_wait_timeout: ClassVar[int] = 20 * 60 * 60
 
-    # Known stages during machine initialization and boot
     BOOT_STATES: ClassVar[Tuple[str, ...]] = (
         "powering-on",
         "starting-vm",
@@ -93,13 +91,12 @@ class Machine:
     stop_timeout: int = 30
 
     def __post_init__(self) -> None:
-        self.mac = self.mac.lower()
+        self.mac = net_mgr.clean_mac(self.mac)
         self.is_started = to_bool(self.is_started)
         self.only_vm = to_bool(self.only_vm)
 
     @property
     def _is_started(self) -> str:
-        """Backward compatibility property for legacy SQLite callers."""
         return "1" if self.is_started else "0"
 
     @_is_started.setter
@@ -107,12 +104,10 @@ class Machine:
         self.is_started = to_bool(val)
 
     def is_only_vm(self) -> bool:
-        """Backward compatibility helper for callers expecting a method."""
         return self.only_vm
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Machine:
-        """Construct a Machine instance from a SQLite row or dictionary."""
         raw_started = data.get("is_started") if "is_started" in data else data.get("_is_started", False)
 
         try:
@@ -127,7 +122,7 @@ class Machine:
 
         return cls(
             name=str(data.get("name") or ""),
-            mac=str(data.get("mac") or "").lower(),
+            mac=net_mgr.clean_mac(str(data.get("mac") or "")),
             ip=str(data.get("ip") or ""),
             is_started=to_bool(raw_started),
             state=str(data.get("state") or ""),
@@ -149,13 +144,11 @@ class Machine:
         )
 
     def fill_from_dict(self, data: Dict[str, Any]) -> None:
-        """Update existing Machine instance attributes in-place from a dictionary."""
         updated = self.from_dict(data)
         for f in fields(self):
             setattr(self, f.name, getattr(updated, f.name))
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert machine attributes into dictionary representation for SQLite upserts."""
         d = asdict(self)
         d["only_vm"] = 1 if self.only_vm else 0
         d["is_started"] = 1 if self.is_started else 0
@@ -163,7 +156,6 @@ class Machine:
         return d
 
     def _preprocess_cmd(self, cmd: str) -> str:
-        """Substitute parameters into startcmd, stopcmd, and powercmd."""
         cmd = cmd.replace("$OS_ARCH", self.get_os_arch())
         cmd = cmd.replace("$MAC", self.mac)
         cmd = cmd.replace("$PID", str(os.getpid()))
@@ -172,59 +164,27 @@ class Machine:
         return cmd
 
     def get_vmlog_path(self) -> pathlib.Path:
-        """Return path to this machine's VM serial console log file."""
-        log_dir = pathlib.Path(config.MAMA_PATH) / "log"
-        return log_dir / f"{self.name}-vmlog"
+        return vm_mgr.get_vmlog_path(self.name)
 
     def get_vmpid_path(self) -> pathlib.Path:
-        """Return path to this machine's VM pidfile."""
-        run_mama = pathlib.Path("/run/mama") / f"{self.name}.pid"
-        fallback = pathlib.Path(config.MAMA_PATH) / "run" / f"{self.name}.pid"
-
-        if run_mama.exists():
-            return run_mama
-        if fallback.exists():
-            return fallback
-
-        try:
-            pathlib.Path("/run/mama").mkdir(parents=True, exist_ok=True)
-            return run_mama
-        except OSError:
-            try:
-                (pathlib.Path(config.MAMA_PATH) / "run").mkdir(parents=True, exist_ok=True)
-            except OSError:
-                pass
-            return fallback
+        return vm_mgr.get_vmpid_path(self.name)
 
     def get_vm_pid(self) -> Optional[int]:
-        """Return active QEMU PID for this machine if running, or None."""
-        pid_file = self.get_vmpid_path()
-        if not pid_file.exists():
-            return None
+        return vm_mgr.get_vm_pid(self.name)
 
-        try:
-            pid = int(pid_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            return None
+    def is_vm(self) -> bool:
+        if self.only_vm:
+            return True
+        return self.get_vm_pid() is not None
 
-        if pid <= 0:
-            return None
+    def kill_vm(self) -> Optional[bool]:
+        return vm_mgr.kill_vm(self.name)
 
-        try:
-            os.kill(pid, 0)
-            return pid
-        except PermissionError:
-            return pid
-        except (ProcessLookupError, OSError):
-            try:
-                pid_file.unlink()
-            except OSError:
-                pass
-            return None
+    def start_vm(self) -> bool:
+        return vm_mgr.start_vm(self)
 
     @contextlib.contextmanager
     def lock(self):
-        """Exclusive filesystem lock for mutating machine disk contents."""
         lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
         try:
             lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +210,6 @@ class Machine:
 
     @classmethod
     def get_all(cls) -> List[Machine]:
-        """Query all machines directly from SQLite."""
         rows = MachineRepository.get_all()
         machs = [cls.from_dict(row) for row in rows]
         machs.sort(key=lambda x: x.name)
@@ -258,45 +217,38 @@ class Machine:
 
     @classmethod
     def get_by_name(cls, name: str) -> Optional[Machine]:
-        """Indexed point-lookup by machine name from SQLite."""
         row = MachineRepository.get_by_name(name)
         return cls.from_dict(row) if row else None
 
     @classmethod
     def find_by_mac(cls, mac: str) -> Optional[Machine]:
-        """Indexed point-lookup by MAC address from SQLite."""
-        row = MachineRepository.get_by_mac(mac)
+        row = MachineRepository.get_by_mac(net_mgr.clean_mac(mac))
         return cls.from_dict(row) if row else None
 
     def set_state(self, state: str) -> None:
-        """Record the latest lifecycle/boot state for this machine."""
         self.state = state
         MachineRepository.update_fields(self.name, {"state": state})
         self.debug(f"State: {state}")
 
     @classmethod
     def set_state_by_name(cls, name: str, state: str) -> None:
-        """Update state directly by machine name."""
         if name:
             MachineRepository.update_fields(name, {"state": state})
 
     @classmethod
     def set_state_by_mac(cls, mac: str, state: str) -> None:
-        """Update state directly by MAC address lookup."""
         if not mac:
             return
         mach = cls.find_by_mac(mac)
         if mach:
             mach.set_state(state)
         else:
-            MachineRepository.update_fields(mac, {"state": state})
+            MachineRepository.update_fields(net_mgr.clean_mac(mac), {"state": state})
 
     def save(self) -> None:
-        """Upsert complete machine configuration to SQLite."""
         MachineRepository.upsert_machine(self.to_dict())
 
     def load(self) -> None:
-        """Reload machine properties from SQLite database."""
         row = None
         if self.name:
             row = MachineRepository.get_by_name(self.name)
@@ -309,7 +261,6 @@ class Machine:
         fatal("Failed to load machine")
 
     def clear(self) -> None:
-        """Atomically clear IP, started status, and state in DB."""
         self.ip = ""
         self.is_started = False
         self.state = "offline"
@@ -317,58 +268,28 @@ class Machine:
         self.debug("cleared machine state")
 
     def clear_job(self) -> None:
-        """Atomically clear job details in DB."""
         self.job = ""
         self.job_pid = ""
         MachineRepository.update_fields(self.name, {"job": "", "job_pid": ""})
         self.debug("cleared job")
 
     def get_ip_from_leases(self) -> Optional[str]:
-        """Resolve IP address from active dnsmasq DHCP leases if the machine is started."""
         if not self.is_started:
             return None
-        if not getattr(config, "DHCP_ENABLED", True):
-            return None
-        try:
-            from dhcp import DnsmasqManager
-            leases = DnsmasqManager.get_active_leases()
-            return leases.get(self.mac.lower())
-        except Exception:
-            return None
+        return net_mgr.get_ip_from_leases(self.mac)
 
     def get_ip_from_mac(self) -> Optional[str]:
-        """Resolve IP address directly from /proc/net/arp if the machine is started."""
         if not self.is_started:
             return None
-
-        target_mac = self.mac.lower()
-        try:
-            with open("/proc/net/arp", "r", encoding="utf-8") as f:
-                for line in f.readlines()[1:]:
-                    parts = line.split()
-                    if (
-                        len(parts) >= 4
-                        and parts[3].lower() == target_mac
-                        and parts[3] != "00:00:00:00:00:00"
-                    ):
-                        ip = parts[0]
-                        if Util.is_valid_ip(ip):
-                            return ip
-        except OSError:
-            pass
-        return None
+        return net_mgr.get_ip_from_mac(self.mac)
 
     def get_ip(self) -> Optional[str]:
-        # Stopped machines must have no IP
         if not self.is_started:
             if self.ip:
                 self.set_ip("")
             return None
 
-        # 1. Check active dnsmasq DHCP leases
         ip = self.get_ip_from_leases()
-
-        # 2. Fallback to neighbor ARP table
         if not ip:
             ip = self.get_ip_from_mac()
 
@@ -389,7 +310,6 @@ class Machine:
         MachineRepository.update_fields(self.name, {"ip": ip})
 
     def get_power(self) -> str:
-        """Execute powercmd to query current power usage in Watts."""
         if not self.powercmd or not self.powercmd.strip():
             return "-"
 
@@ -410,73 +330,21 @@ class Machine:
         return "-"
 
     def is_pingable(self, ip: Optional[str] = None) -> bool:
-        """Check ICMP reachability with a 2-second timeout."""
         target_ip = ip or self.get_ip()
-        if not target_ip:
-            return False
-        try:
-            res = subprocess.run(
-                ["ping", "-w", "2", "-c", "1", target_ip],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return res.returncode == 0
-        except OSError:
-            return False
+        return net_mgr.is_pingable(target_ip) if target_ip else False
 
     def get_ssh_status(self) -> str:
-        """Test SSH connectivity using a standard non-blocking TCP socket check."""
         ip = self.get_ip()
-        if not ip:
-            return "closed"
-
-        try:
-            with socket.create_connection((ip, 22), timeout=3):
-                return "open"
-        except OSError:
-            return "closed"
+        return net_mgr.get_ssh_status(ip) if ip else "closed"
 
     def is_nfs_mounted(self) -> bool:
-        """Check if the machine has an active NFSv4 session on the MAMA host via /proc/fs/nfsd/clients."""
         ip = self.get_ip()
-        if not ip:
-            return False
-
-        nfsd_clients = pathlib.Path("/proc/fs/nfsd/clients")
-        if not nfsd_clients.exists() or not nfsd_clients.is_dir():
-            return False
-
-        try:
-            for client_dir in nfsd_clients.iterdir():
-                info_file = client_dir / "info"
-                if info_file.is_file():
-                    try:
-                        content = info_file.read_text(encoding="utf-8")
-                        # Format in /proc/fs/nfsd/clients/*/info: address: "192.168.2.X:PORT"
-                        if f'"{ip}:' in content:
-                            return True
-                    except OSError:
-                        continue
-        except (OSError, PermissionError):
-            pass
-
-        return False
+        return net_mgr.is_nfs_mounted(ip) if ip else False
 
     def is_booting(self) -> bool:
-        """Check if machine is currently progressing through active boot phases."""
         return self.state in self.BOOT_STATES or self.state.startswith("fetching-")
 
     def get_state(self) -> str:
-        """Resolve the unified machine state.
-
-        Returns:
-            - offline: machine is stopped / powered off.
-            - boot stages: discrete milestone (dhcp-bound, fetching-kernel, booting, nfs-mounted, etc.).
-            - online: machine has finished booting and SSH port 22 is open.
-            - unresponsive: machine was running/online but stopped responding to ping/SSH.
-            - stopping: machine is actively shutting down.
-        """
-        # 1. Stopped machines are offline
         if not self.is_started:
             if self.ip:
                 self.set_ip("")
@@ -484,14 +352,12 @@ class Machine:
                 self.set_state("offline")
             return "offline"
 
-        # 2. Machine undergoing graceful shutdown
         if self.state == "stopping":
             ip = self.get_ip()
             if not ip or not self.is_pingable(ip):
                 return "offline"
             return "stopping"
 
-        # 3. Resolve active IP address
         ip = self.get_ip()
         if not ip:
             if self.is_booting():
@@ -500,7 +366,6 @@ class Machine:
                 self.set_state("unresponsive")
             return "unresponsive"
 
-        # 4. Check network and SSH connectivity
         ping_ok = self.is_pingable(ip)
         ssh_ok = (self.get_ssh_status() == "open") if ping_ok else False
 
@@ -509,7 +374,6 @@ class Machine:
                 self.set_state("online")
             return "online"
 
-        # 5. Retain intermediate boot stage if still in boot sequence
         if self.is_booting():
             if self.is_nfs_mounted():
                 if self.state != "nfs-mounted":
@@ -519,17 +383,14 @@ class Machine:
         if self.state == "boot-failed":
             return "boot-failed"
 
-        # 6. Machine finished boot or was online, but ping/SSH dropped
         if self.state != "unresponsive":
             self.set_state("unresponsive")
         return "unresponsive"
 
     def get_status(self) -> str:
-        """Backward compatibility alias for get_state."""
         return self.get_state()
 
     def wait_for_state(self, target_state: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
-        """Wait for machine to reach a specific unified lifecycle state."""
         try:
             seconds_int = int(seconds) if seconds else 0
         except (ValueError, TypeError):
@@ -576,12 +437,10 @@ class Machine:
         return True
 
     def wait_for_status(self, status: str, seconds: Union[int, float, str], dont_print: bool = False) -> bool:
-        """Backward-compatible alias for wait_for_state."""
         return self.wait_for_state(status, seconds, dont_print=dont_print)
 
     @staticmethod
     def format_state(state: str) -> str:
-        """Format state with rich color syntax for terminal output."""
         if state == "online":
             return "[bold green]online[/bold green]"
         elif state == "offline":
@@ -697,7 +556,6 @@ class Machine:
                 table.add_row("Job status", "[bold red]STALE (process not running)[/bold red]")
 
         try:
-            from job import JobQueue
             queued = JobQueue.get_queue(self.name)
             if queued:
                 table.add_row("Queued jobs", f"[bold yellow]{len(queued)} waiting[/bold yellow]")
@@ -815,7 +673,7 @@ class Machine:
             "power": self.get_power,
             "ip": self.get_ip,
             "nfs_mounted": lambda: self.is_nfs_mounted(),
-            "queue": lambda: len(__import__("job").JobQueue.get_queue(self.name)),
+            "queue": lambda: len(JobQueue.get_queue(self.name)),
             "params": lambda: self.boot_params,
             "vmparams": lambda: self.vm_params,
             "os": lambda: self.os,
@@ -968,202 +826,7 @@ class Machine:
 
         return ret
 
-    def is_vm(self) -> bool:
-        """Check if this machine is configured exclusively as a VM or currently running as a VM."""
-        if self.only_vm:
-            return True
-        return self.get_vm_pid() is not None
-
-    def kill_vm(self) -> Optional[bool]:
-        """Terminate active QEMU VM process using SIGTERM and SIGKILL fallback."""
-        pid = self.get_vm_pid()
-        if not pid:
-            return False
-
-        self.debug(f"Killing VM with pid {pid}")
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            subprocess.run(["sudo", "kill", str(pid)])
-
-        for _ in range(10):
-            try:
-                os.kill(pid, 0)
-                time.sleep(0.2)
-            except (ProcessLookupError, OSError):
-                break
-        else:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                subprocess.run(["sudo", "kill", "-9", str(pid)])
-
-        pid_file = self.get_vmpid_path()
-        try:
-            pid_file.unlink(missing_ok=True)
-        except OSError:
-            subprocess.run(["sudo", "rm", "-f", str(pid_file)])
-
-        return True
-
-    def start_vm(self) -> bool:
-        if not Util.is_root():
-            self.out("You must be root to start a VM")
-
-        if not self.os:
-            self.error("No OS has been configured!")
-            return False
-
-        if not self.kernel and not self.os.endswith("/NONE"):
-            self.error("No kernel set for machine")
-            return False
-
-        if self.get_vm_pid() is not None:
-            self.error("Failed to start VM. Already running.")
-            return False
-
-        vmlog_path = self.get_vmlog_path()
-        pid_path = self.get_vmpid_path()
-
-        try:
-            vmlog_path.parent.mkdir(parents=True, exist_ok=True)
-            if Util.is_root():
-                vmlog_path.touch(mode=0o666, exist_ok=True)
-                vmlog_path.chmod(0o666)
-            else:
-                subprocess.run(["sudo", "touch", str(vmlog_path)])
-                subprocess.run(["sudo", "chmod", "666", str(vmlog_path)])
-            with open(vmlog_path, "w") as f:
-                pass
-        except Exception as e:
-            self.debug(f"Could not prepare vmlog file {vmlog_path}: {e}")
-
-        try:
-            pid_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            self.debug(f"Could not prepare pidfile directory {pid_path.parent}: {e}")
-
-        self.is_started = True
-        self.set_state("starting-vm")
-        MachineRepository.update_fields(self.name, {"_is_started": 1})
-
-        self.out(f"Starting virtual machine with OS {self.os} and kernel {self.kernel}")
-
-        num_cores = os.cpu_count() or 1
-        os_arch = self.os.split("/")[0] if "/" in self.os else self.os
-        mama_arch = subprocess.check_output(["uname", "-p"], text=True).strip()
-
-        if os_arch == "aarch64":
-            kernel_filename = f"Image-{self.kernel}"
-        elif os_arch == "ppc64le":
-            kernel_filename = f"vmlinux-{self.kernel}"
-        else:
-            kernel_filename = f"vmlinuz-{self.kernel}"
-        initrd_filename = f"initrd-{self.kernel}"
-
-        kernel = os.path.join(self.get_kernel_path(), kernel_filename)
-        initrd = os.path.join(self.get_kernel_path(), initrd_filename)
-
-        arch = "x86_64" if os_arch == "i686" else os_arch
-
-        qemu_cmd = []
-        if not Util.is_root():
-            qemu_cmd.append("sudo")
-        qemu_cmd.append(f"qemu-system-{arch}")
-
-        qemu_cmd.extend([
-            "-daemonize",
-            "-pidfile", str(pid_path),
-            "-smp", str(num_cores),
-            "-m", str(1024 * 44),
-            "-net", f"nic,model=virtio,macaddr={self.mac}",
-            "-net", "bridge,br=br0",
-            "-display", "none",
-            "-chardev", f"file,id=char0,path={vmlog_path}",
-            "-serial", "chardev:char0",
-            "-monitor", "none",
-        ])
-
-        if os_arch == "aarch64":
-            qemu_cmd.extend([
-                "-machine", "virt,gic-version=3",
-                "-cpu", "cortex-a72",
-                "-accel", "tcg,thread=multi,tb-size=1024",
-                "-bios", "/usr/share/qemu/qemu-uefi-aarch64.bin",
-            ])
-        elif os_arch == "ppc64le":
-            qemu_cmd.extend(["-M", "pseries"])
-        else:
-            qemu_cmd.extend(["-cpu", "host"])
-
-        append_params = (
-            f"{self.boot_params} ip=dhcp rd.neednet=1 ifname=lan0:{self.mac} "
-            f"systemd.hostname={self.name} "
-            f"root=nfs:{config.MAMA_HOST}:/machines/{self.name}/{self.os},rw,vers=4,nconnect=16 "
-            f"console=ttyS0 console=tty"
-        ).strip()
-
-        qemu_cmd.extend([
-            "-kernel", kernel,
-            "-initrd", initrd,
-            "-append", append_params,
-        ])
-
-        if arch == mama_arch:
-            qemu_cmd.append("-enable-kvm")
-
-        if self.vm_params:
-            qemu_cmd.extend(shlex.split(self.vm_params))
-
-        self.debug(shlex.join(qemu_cmd))
-        res = subprocess.run(qemu_cmd)
-        if res.returncode != 0:
-            self.error("Failed to start QEMU daemon.")
-            self.set_state("boot-failed")
-            self.clear()
-            return False
-
-        time.sleep(3)
-
-        if self.get_vm_pid() is None:
-            self.error("QEMU process exited immediately after starting.")
-            self.set_state("boot-failed")
-            self.clear()
-            return False
-
-        # QEMU daemon is running; transition to booting stage
-        self.set_state("booting")
-
-        effective_timeout = MachineRepository.get_calculated_start_timeout(
-            self.name, self.os, "vm", default_timeout=self.start_timeout
-        )
-        self.debug(f"Using VM boot timeout: {effective_timeout}s for OS {self.os}")
-
-        t_start = time.time()
-        ret = self.wait_for_state("online", effective_timeout)
-
-        if ret:
-            self.set_state("online")
-            elapsed = int(time.time() - t_start)
-            MachineRepository.record_start_time(self.name, self.os, "vm", elapsed, start_time=int(t_start))
-            new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "vm")
-            self.set("start-timeout", new_timeout)
-            self.debug(
-                f"VM boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
-            )
-        else:
-            self.set_state("boot-failed")
-            self.kill_vm()
-            self.clear()
-
-        return ret
-
     def stop(self, force: bool = False) -> bool:
-        # If already not running, ensure state and IP are completely cleared
         if not self.is_started and not force:
             self.clear()
             return True
@@ -1176,7 +839,6 @@ class Machine:
         )
         self.debug(f"Using {boot_type.upper()} stop timeout: {effective_timeout}s for OS {self.os}")
 
-        # Check reachability before transitioning state to 'stopping'
         ssh_was_open = (self.get_ssh_status() == "open")
         self.set_state("stopping")
         t_stop_start = time.time()
@@ -1197,7 +859,6 @@ class Machine:
             else:
                 self.error(f"Graceful shutdown timed out after {effective_timeout}s. Forcing power off.")
 
-        # Ensure power command executes even if graceful halt timed out or machine was hung
         if self.stopcmd:
             stopcmd = self._preprocess_cmd(self.stopcmd)
             self.debug(f"Stop command: {stopcmd}")
@@ -1265,7 +926,6 @@ class Machine:
 
         console = Console()
         try:
-            from job import JobQueue
             queue_ctx = JobQueue.track(self.name, f"wait (PID {os.getpid()})")
         except Exception:
             queue_ctx = contextlib.nullcontext()
@@ -1277,7 +937,6 @@ class Machine:
                     self.load()
 
     def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
-        # Fast path: proceed directly if SSH port 22 is already open
         if self.get_ssh_status() != "open":
             if not self.wait_for_state("online", 30, dont_print=True):
                 self.error("Unable to execute ssh cmd since machine is not online.")
@@ -1289,35 +948,20 @@ class Machine:
             self.error("No IP address available to execute ssh cmd.")
             return False
 
-        ssh_args = [
-            "ssh",
-            "-q",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=no",
-            f"root@{ip}",
-            "-t",
-            cmd,
-        ]
-
-        if not no_timeout:
-            ssh_args = ["timeout", "--foreground", f"{self.ssh_cmd_timeout}m"] + ssh_args
-
         logfile = getattr(Log, "logfile", False)
-        if logfile:
-            with open(logfile, "a", encoding="utf-8") as lf:
-                res = subprocess.run(ssh_args, stdout=lf, stderr=subprocess.STDOUT)
-        else:
-            res = subprocess.run(ssh_args)
-
-        return res.returncode
+        return net_mgr.run_ssh_cmd(
+            ip=ip,
+            cmd=cmd,
+            timeout_mins=self.ssh_cmd_timeout,
+            no_timeout=no_timeout,
+            logfile=logfile,
+        )
 
     def reserve(self, user: str) -> None:
         self.reservation = user
         MachineRepository.update_fields(self.name, {"reservation": user})
 
     def get_kernels(self) -> Dict[str, str]:
-        """Discover available kernels and extract modification times natively using pathlib."""
         path = pathlib.Path(self.get_kernel_path())
         if not path.is_dir():
             return {}

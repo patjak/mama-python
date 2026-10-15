@@ -10,54 +10,12 @@ import urllib.parse
 script_dir = pathlib.Path(__file__).parent.resolve()
 sys.path.insert(0, str(script_dir))
 
+from bootinfo import bootinfo
 import config
 from dhcp import DnsmasqManager
 from machine import Machine
-from main import bootinfo
+import net_mgr
 from repository import MachineRepository
-
-
-def clean_mac(mac_str: str) -> str:
-    """Normalize MAC address by stripping whitespace, leading slashes/backslashes, and converting hyphens to colons."""
-    if not mac_str:
-        return ""
-    return mac_str.strip().lstrip("\\/\"'").replace("-", ":").lower()
-
-
-def get_mac_from_ip(client_ip: str) -> str:
-    """Extract client MAC address from DHCP leases, MachineRepository, or neighbor ARP table."""
-    if not client_ip:
-        return ""
-
-    # 1. Check active dnsmasq DHCP leases
-    if getattr(config, "DHCP_ENABLED", True):
-        leases = DnsmasqManager.get_active_leases()
-        for mac, ip in leases.items():
-            if ip == client_ip:
-                return clean_mac(mac)
-
-    # 2. Check registered machines in MAMA database
-    try:
-        for m in MachineRepository.get_all():
-            if m.get("ip") == client_ip and m.get("mac"):
-                return clean_mac(m.get("mac"))
-    except Exception:
-        pass
-
-    # 3. Fallback to neighbor ARP table
-    try:
-        with open("/proc/net/arp", "r", encoding="utf-8") as f:
-            for line in f.readlines()[1:]:
-                parts = line.split()
-                if (
-                    len(parts) >= 4
-                    and parts[0] == client_ip
-                    and parts[3] != "00:00:00:00:00:00"
-                ):
-                    return clean_mac(parts[3])
-    except OSError:
-        pass
-    return ""
 
 
 class iPXEHandler(BaseHTTPRequestHandler):
@@ -99,7 +57,7 @@ class iPXEHandler(BaseHTTPRequestHandler):
                         Machine.set_state_by_name(mach_name, f"fetching-{fname}")
                 else:
                     client_ip = self.client_address[0]
-                    client_mac = clean_mac(get_mac_from_ip(client_ip))
+                    client_mac = net_mgr.clean_mac(net_mgr.get_mac_from_ip(client_ip))
                     if client_mac:
                         if fname.startswith("initrd"):
                             Machine.set_state_by_mac(client_mac, "fetching-initrd")
@@ -141,16 +99,15 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         mac_param = params.get("MAC") or params.get("mac")
         if mac_param and mac_param[0]:
-            mac = clean_mac(mac_param[0])
+            mac = net_mgr.clean_mac(mac_param[0])
         else:
-            mac = clean_mac(get_mac_from_ip(client_ip))
+            mac = net_mgr.clean_mac(net_mgr.get_mac_from_ip(client_ip))
 
         if not mac:
             response = "#!ipxe\necho No MAC specified\nshell\n"
             self._send_response(200, response)
             return
 
-        # Track that machine requested its iPXE config and sync lease to DB
         try:
             Machine.set_state_by_mac(mac, "ipxe-boot-config")
             if getattr(config, "DHCP_ENABLED", True):
@@ -199,10 +156,8 @@ def main() -> None:
     port = int(os.environ.get("PORT", 8080))
     bind_addr = os.environ.get("BIND_ADDR", config.MAMA_HOST)
 
-    # Initialize repository database on server startup
     MachineRepository.load()
 
-    # Synchronize dnsmasq DHCP, leases, and built-in TFTP server
     if getattr(config, "DHCP_ENABLED", True):
         sys.stderr.write("[boot.py] Synchronizing dnsmasq DHCP/TFTP server...\n")
         DnsmasqManager.reload_or_restart()

@@ -1,152 +1,18 @@
 from __future__ import annotations
 
-import contextlib
 import os
 import pathlib
-import sqlite3
 import subprocess
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 
 from rich.console import Console
 
-# Environment & helper stubs
 import config
+from job_queue import JobQueue
 from logger import Log, debug, error, fatal, out
 from os_mgr import Os
-from repository import (
-    Machine,
-    select_machine,
-)
-
-
-class JobQueue:
-    """Tracks waiting processes in SQLite queue table across concurrent executions."""
-
-    @staticmethod
-    def _get_db_path() -> str:
-        return getattr(
-            config,
-            "DB_FILE",
-            f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db",
-        )
-
-    @classmethod
-    def _init_db(cls) -> None:
-        db_path = cls._get_db_path()
-        try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS job_queue (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        machine_name TEXT NOT NULL,
-                        job TEXT NOT NULL,
-                        pid TEXT NOT NULL,
-                        queued_at INTEGER NOT NULL
-                    );
-                    """
-                )
-                conn.commit()
-        except Exception as e:
-            debug(f"[JobQueue] Failed to initialize table: {e}")
-
-    @classmethod
-    def enqueue(cls, machine_name: str, job_str: str, pid: Optional[int] = None) -> None:
-        cls._init_db()
-        if pid is None:
-            pid = os.getpid()
-        now = int(time.time())
-        db_path = cls._get_db_path()
-        try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                conn.execute(
-                    "INSERT INTO job_queue (machine_name, job, pid, queued_at) VALUES (?, ?, ?, ?)",
-                    (machine_name, job_str, str(pid), now),
-                )
-                conn.commit()
-        except Exception as e:
-            debug(f"[JobQueue] Error enqueuing {job_str} on {machine_name}: {e}")
-
-    @classmethod
-    def dequeue(cls, machine_name: str, pid: Optional[int] = None) -> None:
-        cls._init_db()
-        if pid is None:
-            pid = os.getpid()
-        db_path = cls._get_db_path()
-        try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                conn.execute(
-                    "DELETE FROM job_queue WHERE machine_name = ? AND pid = ?",
-                    (machine_name, str(pid)),
-                )
-                conn.commit()
-        except Exception as e:
-            debug(f"[JobQueue] Error dequeuing PID {pid} on {machine_name}: {e}")
-
-    @classmethod
-    def clear_machine(cls, machine_name: str) -> None:
-        cls._init_db()
-        db_path = cls._get_db_path()
-        try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                if machine_name and machine_name != "all":
-                    conn.execute("DELETE FROM job_queue WHERE machine_name = ?", (machine_name,))
-                else:
-                    conn.execute("DELETE FROM job_queue")
-                conn.commit()
-        except Exception as e:
-            debug(f"[JobQueue] Error clearing queue for {machine_name}: {e}")
-
-    @classmethod
-    def get_queue(cls, machine_name: str = "") -> List[Dict[str, Any]]:
-        cls._init_db()
-        db_path = cls._get_db_path()
-        try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                query = "SELECT * FROM job_queue"
-                params: List[Any] = []
-                if machine_name:
-                    query += " WHERE machine_name = ?"
-                    params.append(machine_name)
-                query += " ORDER BY queued_at ASC, id ASC"
-                rows = conn.execute(query, params).fetchall()
-        except Exception as e:
-            debug(f"[JobQueue] Error fetching queue: {e}")
-            return []
-
-        valid_entries: List[Dict[str, Any]] = []
-        for r in rows:
-            entry = dict(r)
-            try:
-                pid = int(entry["pid"])
-            except (ValueError, TypeError):
-                pid = 0
-
-            if pid <= 0:
-                cls.dequeue(entry["machine_name"], pid)
-                continue
-
-            try:
-                os.kill(pid, 0)
-                valid_entries.append(entry)
-            except PermissionError:
-                valid_entries.append(entry)
-            except (ProcessLookupError, OSError):
-                cls.dequeue(entry["machine_name"], pid)
-
-        return valid_entries
-
-    @classmethod
-    @contextlib.contextmanager
-    def track(cls, machine_name: str, job_str: str):
-        pid = os.getpid()
-        cls.enqueue(machine_name, job_str, pid)
-        try:
-            yield
-        finally:
-            cls.dequeue(machine_name, pid)
+from repository import Machine, select_machine
 
 
 class Job:
@@ -176,7 +42,6 @@ class Job:
             j1 = m.job.split()
             j2 = job_str.split()
 
-            # Check format of job description (expects 3 parts)
             if len(j1) != 3 or len(j2) != 3:
                 continue
 
@@ -252,10 +117,8 @@ class Job:
 
         job_str = f"prepare {self.name} {arch}/{os_name}"
 
-        # Wait for all machines running this job to finish
         self._wait_for_active_job(job_str)
 
-        # Wait for the worker to finish any running jobs
         worker_mach = select_machine(worker)
         if not worker_mach.is_idle():
             self.out(f"Waiting for job to finish: {worker_mach.job}")
@@ -266,7 +129,6 @@ class Job:
                 with console.status(f"[bold yellow]Waiting for worker machine '{worker_mach.name}' job to finish: {worker_mach.job}...[/bold yellow]"):
                     time.sleep(10)
                     worker_mach.load()
-                    # Check for stale jobs while waiting
                     worker_mach.detect_and_clear_stale_job()
 
         prev_job = worker_mach.job
@@ -275,7 +137,6 @@ class Job:
         worker_mach.job_pid = str(os.getpid())
         worker_mach.save()
 
-        # Configure worker with the target OS specified on the command line if runnable
         if Os.is_runnable(arch, os_name, worker_mach):
             worker_mach.set("os", Os(os_name, arch))
 
@@ -332,7 +193,6 @@ class Job:
         mach.job_pid = str(os.getpid())
         mach.save()
 
-        # Configure target device with the target OS specified on the command line if runnable
         if Os.is_runnable(arch, os_name, mach):
             mach.set("os", Os(os_name, arch))
 
@@ -352,7 +212,7 @@ class Job:
     def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
         no_retry = self.no_retry
 
-        ssh_ret = 0  # Stores return code from last executed command
+        ssh_ret = 0
         error_flag = False
         context = ""
         lines = job_content.splitlines()
@@ -361,7 +221,6 @@ class Job:
             line = line.strip()
 
             if line.startswith("["):
-                # Extract context header within brackets
                 parts = line.split("[", 1)
                 if len(parts) > 1:
                     context_inner = parts[1].split("]", 1)[0].strip()
@@ -372,7 +231,6 @@ class Job:
 
                     self.debug(f"Switching to context: {context}")
 
-                    # When switching context between WORKERs and DEVICEs, start and stop machines
                     if old_context != context:
                         if old_context == "DEVICE" and mach:
                             if not mach.stop():
@@ -389,7 +247,6 @@ class Job:
                             m = worker
 
                         if (context in ("DEVICE", "WORKER")) and m:
-                            # Reload state from database so any OS/kernel updates from [MAMA] are applied
                             m.load()
 
                             if not m.stop():
@@ -431,7 +288,6 @@ class Job:
                     error_flag = True
                     break
 
-            # Replace $RET with the last command return code
             line = line.replace("$RET", str(ssh_ret))
 
             mach_for_log = None
