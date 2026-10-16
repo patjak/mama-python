@@ -7,8 +7,8 @@ import pathlib
 from typing import Any, List, Optional
 
 # Environment & helper stubs
-import config
-from repository import Util
+from . import config
+from .util import Util
 
 
 class Os:

@@ -3,46 +3,19 @@ from __future__ import annotations
 import logging
 import sys
 
-from bootinfo import bootinfo
-from cli_commands import (
-    cmd_bootinfo,
-    cmd_clear,
-    cmd_connect,
-    cmd_copy_os,
-    cmd_delete,
-    cmd_delete_os,
-    cmd_dhcp,
-    cmd_get,
-    cmd_history,
-    cmd_info,
-    cmd_install_os,
-    cmd_ipxe,
-    cmd_job_prepare,
-    cmd_job_run,
-    cmd_list,
-    cmd_list_kernel,
-    cmd_list_os,
-    cmd_list_resources,
-    cmd_log,
-    cmd_new,
-    cmd_queue,
-    cmd_release,
-    cmd_reserve,
-    cmd_serve,
-    cmd_set,
-    cmd_start,
-    cmd_start_vm,
-    cmd_stop,
-    cmd_wait,
+from .bootinfo import bootinfo
+from . import builder
+from . import cli_commands
+from .cli_commands import (
     list_kernels,
     select_kernel,
     select_machine,
     select_os,
 )
-from cli_parser import HAS_ARGCOMPLETE, setup_cli_parser
-import config
-from logger import Log, fatal
-from repository import MachineRepository
+from .cli_parser import HAS_ARGCOMPLETE, setup_cli_parser
+from . import config
+from .logger import Log, fatal
+from .repository import MachineRepository
 
 __all__ = [
     "main",
@@ -61,122 +34,191 @@ def main() -> None:
         import argcomplete
         argcomplete.autocomplete(parser)
 
-    if len(sys.argv) <= 1:
+    args = parser.parse_args()
+
+    # Configure global debug flags
+    if getattr(args, "debug", False):
+        config.DEBUG = True
+        Log.set_level(logging.DEBUG)
+    if getattr(args, "debug_lock", False):
+        config.DEBUG_LOCK = True
+    if getattr(args, "debug_pid", False):
+        config.DEBUG_PID = True
+
+    if not args.command:
         parser.print_help()
         sys.exit(0)
 
-    parsed_args = parser.parse_args()
-
-    config.DEBUG = parsed_args.debug
-    config.DEBUG_LOCK = parsed_args.debug_lock
-    config.DEBUG_PID = parsed_args.debug_pid
-
-    if parsed_args.debug:
-        Log.set_level(logging.DEBUG)
-
+    # Initialize machine repository data
     db_path = getattr(config, "DB_FILE", f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db")
-    if MachineRepository.load() is False:
-        fatal(f"Failed to initialize database: {db_path}\n")
+    try:
+        if MachineRepository.load() is False:
+            fatal(f"Failed to initialize database: {db_path}\n")
+    except Exception:
+        pass
 
-    cmd = parsed_args.command
+    # Command Dispatch Routing
+    if args.command == "list":
+        cli_commands.cmd_list(
+            item=args.item,
+            target=args.target,
+            fast=args.fast,
+        )
 
-    if cmd == "list":
-        cmd_list(fast=getattr(parsed_args, "fast", False))
-    elif cmd == "queue":
-        cmd_queue(parsed_args.machine)
-    elif cmd == "list-os":
-        cmd_list_os(parsed_args.machine)
-    elif cmd == "list-kernel":
-        cmd_list_kernel(parsed_args.machine)
-    elif cmd == "list-resources":
-        cmd_list_resources()
-    elif cmd == "history":
-        cmd_history(parsed_args.machine)
-    elif cmd == "job":
-        if parsed_args.job_action == "prepare":
-            cmd_job_prepare(
-                parsed_args.job_name,
-                parsed_args.arch,
-                parsed_args.os,
-                parsed_args.worker,
-                args=parsed_args.args or "",
-                no_ssh_timeout=parsed_args.no_ssh_timeout,
+    elif args.command == "queue":
+        cli_commands.cmd_queue(arg=args.machine)
+
+    elif args.command == "log":
+        cli_commands.cmd_log(
+            arg=args.machine,
+            vm=args.vm,
+            follow=args.follow,
+            clear=args.clear,
+        )
+
+    elif args.command == "history":
+        cli_commands.cmd_history(arg=args.machine)
+
+    elif args.command == "job":
+        if args.job_action == "prepare":
+            cli_commands.cmd_job_prepare(
+                job_name=args.job_name,
+                arch=args.arch,
+                os_name=args.os,
+                worker=args.worker,
+                args=args.args,
+                no_ssh_timeout=args.no_ssh_timeout,
             )
-        elif parsed_args.job_action == "run":
-            cmd_job_run(
-                parsed_args.job_name,
-                parsed_args.machine,
-                parsed_args.arch,
-                parsed_args.os,
-                args=parsed_args.args or "",
-                no_ssh_timeout=parsed_args.no_ssh_timeout,
-                no_retry=parsed_args.no_retry,
+        elif args.job_action == "run":
+            cli_commands.cmd_job_run(
+                job_name=args.job_name,
+                machine=args.machine,
+                arch=args.arch,
+                os_name=args.os,
+                args=args.args,
+                no_ssh_timeout=args.no_ssh_timeout,
+                no_retry=args.no_retry,
             )
         else:
-            fatal("Invalid job command")
-    elif cmd == "build-os":
-        from builder import build_os
-        build_os(parsed_args.arch, parsed_args.os, parsed_args.builder, packages=parsed_args.packages or "")
-    elif cmd == "run-os-build-script":
-        from builder import run_os_build_script
-        run_os_build_script(parsed_args.arch, parsed_args.os, packages=parsed_args.packages or "")
-    elif cmd == "install-os":
-        cmd_install_os(parsed_args.machine, parsed_args.arch, parsed_args.os, parsed_args.name)
-    elif cmd == "delete-os":
-        cmd_delete_os(parsed_args.machine, parsed_args.arch, parsed_args.os)
-    elif cmd == "copy-os":
-        cmd_copy_os(
-            parsed_args.src_mach,
-            parsed_args.arch,
-            parsed_args.os,
-            parsed_args.dst_mach,
-            no_overwrite=parsed_args.no_overwrite,
+            parser.parse_args(["job", "--help"])
+
+    elif args.command == "build-os":
+        builder.build_os(
+            arch=args.arch,
+            os_name=args.os,
+            builder=args.builder,
+            packages=args.packages,
         )
-    elif cmd == "new":
-        cmd_new()
-    elif cmd == "delete":
-        cmd_delete(parsed_args.machine)
-    elif cmd == "info":
-        cmd_info(parsed_args.machine)
-    elif cmd == "log":
-        cmd_log(
-            parsed_args.machine,
-            vm=parsed_args.vm,
-            follow=parsed_args.follow,
-            clear=parsed_args.clear,
+
+    elif args.command == "run-os-build-script":
+        builder.run_os_build_script(
+            arch=args.arch,
+            os_name=args.os,
+            packages=args.packages,
         )
-    elif cmd == "start":
-        cmd_start(parsed_args.machine)
-    elif cmd == "start-vm":
-        cmd_start_vm(parsed_args.machine)
-    elif cmd == "stop":
-        cmd_stop(parsed_args.machine)
-    elif cmd == "clear":
-        cmd_clear(parsed_args.machine)
-    elif cmd == "connect":
-        cmd_connect(parsed_args.machine)
-    elif cmd == "set":
-        cmd_set(parsed_args.machine, parsed_args.attr, parsed_args.val)
-    elif cmd == "get":
-        cmd_get(parsed_args.machine, parsed_args.attr)
-    elif cmd == "reserve":
-        cmd_reserve(parsed_args.machine)
-    elif cmd == "release":
-        cmd_release(parsed_args.machine, force=parsed_args.force)
-    elif cmd == "wait":
-        cmd_wait(parsed_args.machine, getattr(parsed_args, "reason", "wait"))
-    elif cmd == "serve":
-        cmd_serve()
-    elif cmd == "ipxe":
-        cmd_ipxe(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
-    elif cmd == "bootinfo":
-        cmd_bootinfo(parsed_args.mac, parsed_args.server_ip, parsed_args.port)
-    elif cmd == "dhcp":
-        cmd_dhcp(parsed_args.dhcp_action)
-    else:
-        parser.print_help()
-        sys.exit(0)
+
+    elif args.command == "install-os":
+        cli_commands.cmd_install_os(
+            machine=args.machine,
+            arch=args.arch,
+            os_name=args.os,
+            name=args.name,
+        )
+
+    elif args.command == "delete-os":
+        cli_commands.cmd_delete_os(
+            machine=args.machine,
+            arch=args.arch,
+            os_name=args.os,
+        )
+
+    elif args.command == "copy-os":
+        cli_commands.cmd_copy_os(
+            src_machine_name=args.src_mach,
+            arch=args.arch,
+            os_name=args.os,
+            dst_machine_name=args.dst_mach,
+            no_overwrite=args.no_overwrite,
+        )
+
+    elif args.command == "new":
+        cli_commands.cmd_new()
+
+    elif args.command == "delete":
+        cli_commands.cmd_delete(arg=args.machine)
+
+    elif args.command == "info":
+        cli_commands.cmd_info(arg=args.machine)
+
+    elif args.command == "start":
+        cli_commands.cmd_start(arg=args.machine)
+
+    elif args.command == "start-vm":
+        cli_commands.cmd_start_vm(arg=args.machine)
+
+    elif args.command == "stop":
+        cli_commands.cmd_stop(arg=args.machine)
+
+    elif args.command == "clear":
+        cli_commands.cmd_clear(arg=args.machine)
+
+    elif args.command == "connect":
+        cli_commands.cmd_connect(arg=args.machine)
+
+    elif args.command == "set":
+        cli_commands.cmd_set(
+            machine=args.machine,
+            attr=args.attr,
+            val_list=args.val,
+        )
+
+    elif args.command == "get":
+        cli_commands.cmd_get(
+            machine=args.machine,
+            attr=args.attr,
+        )
+
+    elif args.command == "reserve":
+        cli_commands.cmd_reserve(arg=args.machine)
+
+    elif args.command == "release":
+        cli_commands.cmd_release(
+            arg=args.machine,
+            force=args.force,
+        )
+
+    elif args.command == "wait":
+        cli_commands.cmd_wait(
+            arg=args.machine,
+            reason=args.reason,
+        )
+
+    elif args.command == "serve":
+        cli_commands.cmd_serve()
+
+    elif args.command == "ipxe":
+        cli_commands.cmd_ipxe(
+            mac=args.mac,
+            server_ip=args.server_ip,
+            port=args.port,
+        )
+
+    elif args.command == "bootinfo":
+        cli_commands.cmd_bootinfo(
+            mac=args.mac,
+            server_ip=args.server_ip,
+            port=args.port,
+        )
+
+    elif args.command == "dhcp":
+        cli_commands.cmd_dhcp(dhcp_action=args.dhcp_action)
+
+    elif args.command == "nfs":
+        cli_commands.cmd_nfs(nfs_action=args.nfs_action)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

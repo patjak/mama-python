@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Union
 
-from logger import debug, fatal
+from .logger import debug, fatal
 
 
 class Options:

@@ -6,8 +6,8 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
-import config
-from logger import debug
+from . import config
+from .logger import debug
 
 
 class JobQueue:

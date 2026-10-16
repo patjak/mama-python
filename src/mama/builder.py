@@ -7,11 +7,11 @@ from typing import Union
 
 from rich.console import Console
 
-import config
-from logger import error, fatal, out
-from machine import Machine
-from os_mgr import Arch, Os
-from repository import Util
+from . import config
+from .logger import error, fatal, out
+from .machine import Machine
+from .os_mgr import Arch, Os
+from .util import Util
 
 
 def build_os(

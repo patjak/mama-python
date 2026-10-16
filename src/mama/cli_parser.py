@@ -20,10 +20,11 @@ try:
 except ImportError:
     HAS_ARGCOMPLETE = False
 
-import config
-from machine import Machine
-from os_mgr import Arch
-from repository import MachineRepository, Util
+from . import config
+from .machine import Machine
+from .os_mgr import Arch
+from .repository import MachineRepository
+from .util import Util
 
 
 def format_duration(seconds: int) -> str:

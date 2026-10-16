@@ -6,8 +6,8 @@ import pathlib
 import subprocess
 from typing import Dict, List
 
-import config
-from logger import debug, error, fatal, out
+from . import config
+from .logger import debug, error, fatal, out
 
 
 class NfsManager:

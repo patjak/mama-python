@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from typing import Optional, Tuple, Union
 
-from logger import fatal
-from machine import Machine
-from repository import MachineRepository
+from .logger import fatal
+from .machine import Machine
+from .repository import MachineRepository
 
 
 def bootinfo(mac: str, server_ip: str, port: Optional[Union[int, str]] = None) -> Tuple[str, str, str]:

@@ -5,8 +5,8 @@ import socket
 import subprocess
 from typing import Optional, Union
 
-import config
-from util import Util
+from . import config
+from .util import Util
 
 
 def clean_mac(mac_str: str) -> str:
@@ -23,7 +23,7 @@ def get_mac_from_ip(client_ip: str) -> str:
 
     if getattr(config, "DHCP_ENABLED", True):
         try:
-            from dhcp import DnsmasqManager
+            from .dhcp import DnsmasqManager
             leases = DnsmasqManager.get_active_leases()
             for mac, ip in leases.items():
                 if ip == client_ip:
@@ -32,7 +32,7 @@ def get_mac_from_ip(client_ip: str) -> str:
             pass
 
     try:
-        from repository import MachineRepository
+        from .repository import MachineRepository
         for m in MachineRepository.get_all():
             if m.get("ip") == client_ip and m.get("mac"):
                 return clean_mac(m.get("mac"))
@@ -60,7 +60,7 @@ def get_ip_from_leases(mac: str) -> Optional[str]:
     if not getattr(config, "DHCP_ENABLED", True):
         return None
     try:
-        from dhcp import DnsmasqManager
+        from .dhcp import DnsmasqManager
         leases = DnsmasqManager.get_active_leases()
         return leases.get(clean_mac(mac))
     except Exception:

@@ -8,11 +8,12 @@ from typing import Any, Union
 
 from rich.console import Console
 
-import config
-from job_queue import JobQueue
-from logger import Log, debug, error, fatal, out
-from os_mgr import Os
-from repository import Machine, select_machine
+from . import config
+from .job_queue import JobQueue
+from .logger import Log, debug, error, fatal, out
+from .os_mgr import Os
+from .machine import Machine
+from .repository import select_machine
 
 
 class Job:

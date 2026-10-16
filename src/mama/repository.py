@@ -6,7 +6,7 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
-import config
+from . import config
 
 
 class MachineRepository:
@@ -407,20 +407,20 @@ def SLEEP_ON_LOCK(seconds: int) -> None:
 
 
 def select_machine(*args: Any, **kwargs: Any) -> Any:
-    """Lazy wrapper to import select_machine from main at call time."""
-    from main import select_machine as _select_machine
+    """Lazy wrapper to import select_machine from cli_commands at call time."""
+    from .cli_commands import select_machine as _select_machine
     return _select_machine(*args, **kwargs)
 
 
 # Dynamic attribute resolver for module re-exports
 def __getattr__(name: str) -> Any:
     if name == "Util":
-        from util import Util
+        from .util import Util
         return Util
     if name == "Os":
-        from os_mgr import Os
+        from .os_mgr import Os
         return Os
     if name == "Machine":
-        from machine import Machine
+        from .machine import Machine
         return Machine
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -8,12 +8,12 @@ import subprocess
 import time
 from typing import TYPE_CHECKING, Optional
 
-import config
-from repository import MachineRepository
-from util import Util
+from . import config
+from .repository import MachineRepository
+from .util import Util
 
 if TYPE_CHECKING:
-    from machine import Machine
+    from .machine import Machine
 
 
 def get_vmlog_path(machine_name: str) -> pathlib.Path:

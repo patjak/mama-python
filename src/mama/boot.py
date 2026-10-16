@@ -6,17 +6,13 @@ import shutil
 import sys
 import urllib.parse
 
-# Ensure MAMA path is in sys.path
-script_dir = pathlib.Path(__file__).parent.resolve()
-sys.path.insert(0, str(script_dir))
-
-from bootinfo import bootinfo
-import config
-from dhcp import DnsmasqManager
-from machine import Machine
-import net_mgr
-from nfs import NfsManager
-from repository import MachineRepository
+from . import config
+from . import net_mgr
+from .bootinfo import bootinfo
+from .dhcp import DnsmasqManager
+from .machine import Machine
+from .nfs import NfsManager
+from .repository import MachineRepository
 
 
 class iPXEHandler(BaseHTTPRequestHandler):

@@ -13,18 +13,19 @@ import questionary
 from rich.console import Console
 from rich.table import Table
 
-from bootinfo import bootinfo
-from builder import build_os, run_os_build_script
-from cli_parser import format_duration
-import config
-from dhcp import DnsmasqManager
-from job import Job
-from job_queue import JobQueue
-from logger import Log, debug, error, fatal, out
-from machine import Machine
-from nfs import NfsManager
-from os_mgr import Arch, Os
-from repository import MachineRepository, Util
+from . import config
+from .bootinfo import bootinfo
+from .builder import build_os, run_os_build_script
+from .cli_parser import format_duration
+from .dhcp import DnsmasqManager
+from .job import Job
+from .job_queue import JobQueue
+from .logger import Log, debug, error, fatal, out
+from .machine import Machine
+from .nfs import NfsManager
+from .os_mgr import Arch, Os
+from .repository import MachineRepository
+from .util import Util
 
 
 def select_machine(arg: Union[str, bool, None] = False) -> Union[Machine, bool]:
@@ -815,7 +816,7 @@ def cmd_wait(arg: Union[str, bool], reason: str = "wait") -> None:
 
 
 def cmd_serve() -> None:
-    import boot
+    from . import boot
     boot.main()
 
 

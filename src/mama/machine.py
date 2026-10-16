@@ -14,14 +14,14 @@ import questionary
 from rich.console import Console
 from rich.table import Table
 
-import config
-from job_queue import JobQueue
-from logger import Log, debug, error, fatal, out
-import net_mgr
-from os_mgr import Os
-from repository import MachineRepository
-from util import Util
-import vm_mgr
+from . import config
+from . import net_mgr
+from . import vm_mgr
+from .job_queue import JobQueue
+from .logger import Log, debug, error, fatal, out
+from .os_mgr import Os
+from .repository import MachineRepository
+from .util import Util
 
 
 def to_bool(val: Any) -> bool:

@@ -5,10 +5,10 @@ import pathlib
 import subprocess
 from typing import Any, Dict, List, Optional, Set
 
-import config
-from logger import debug, error, fatal, out
-from machine import to_bool
-from repository import MachineRepository
+from . import config
+from .logger import debug, error, fatal, out
+from .machine import to_bool
+from .repository import MachineRepository
 
 
 class DnsmasqManager:

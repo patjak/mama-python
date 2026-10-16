@@ -7,8 +7,8 @@ import sys
 import traceback
 from typing import Optional, Union
 
-import config
-from util import Util
+from . import config
+from .util import Util
 
 LOG_LVL_FATAL = logging.CRITICAL
 LOG_LVL_ERROR = logging.ERROR
