@@ -20,26 +20,15 @@ class Os:
     @contextlib.contextmanager
     def lock(arch: str, os_name: str, shared: bool = False):
         """Advisory filesystem lock for an OS template."""
-        lock_dir = pathlib.Path(getattr(config, "LOCK_DIR", f"{config.RUN_DIR}/locks")) / "os"
+        lock_dir = pathlib.Path(config.MAMA_PATH) / "os" / arch
         try:
             lock_dir.mkdir(parents=True, exist_ok=True)
-            lock_file = lock_dir / f"{arch}-{os_name}.lock"
-        except (PermissionError, OSError):
-            legacy_dir = pathlib.Path(config.MAMA_PATH) / "os" / arch
-            if legacy_dir.exists() and os.access(str(legacy_dir), os.W_OK):
-                lock_file = legacy_dir / f".{os_name}.lock"
-            else:
-                tmp_dir = pathlib.Path("/tmp/mama/locks/os")
-                try:
-                    tmp_dir.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
-                lock_file = tmp_dir / f"{arch}-{os_name}.lock"
-
+        except Exception:
+            pass
+        lock_file = lock_dir / f".{os_name}.lock"
         try:
             if not lock_file.exists():
                 lock_file.touch(mode=0o666, exist_ok=True)
-                lock_file.chmod(0o666)
         except Exception:
             pass
 

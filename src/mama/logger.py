@@ -111,8 +111,7 @@ class Log:
             cls.logfile = False
             return
 
-        log_dir = pathlib.Path(getattr(config, "LOG_DIR", f"{config.MAMA_PATH}/log"))
-        log_path = log_dir / str(filename)
+        log_path = pathlib.Path(config.MAMA_PATH) / "log" / str(filename)
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             handler = MamaFileHandler(str(log_path), mode="a", encoding="utf-8")

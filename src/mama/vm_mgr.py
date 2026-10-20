@@ -18,14 +18,13 @@ if TYPE_CHECKING:
 
 def get_vmlog_path(machine_name: str) -> pathlib.Path:
     """Return path to this machine's VM serial console log file."""
-    log_dir = pathlib.Path(getattr(config, "LOG_DIR", f"{config.MAMA_PATH}/log"))
+    log_dir = pathlib.Path(config.MAMA_PATH) / "log"
     return log_dir / f"{machine_name}-vmlog"
 
 
 def get_vmpid_path(machine_name: str) -> pathlib.Path:
     """Return path to this machine's VM pidfile."""
-    run_dir = pathlib.Path(getattr(config, "RUN_DIR", "/run/mama"))
-    run_mama = run_dir / f"{machine_name}.pid"
+    run_mama = pathlib.Path("/run/mama") / f"{machine_name}.pid"
     fallback = pathlib.Path(config.MAMA_PATH) / "run" / f"{machine_name}.pid"
 
     if run_mama.exists():
@@ -34,7 +33,7 @@ def get_vmpid_path(machine_name: str) -> pathlib.Path:
         return fallback
 
     try:
-        run_dir.mkdir(parents=True, exist_ok=True)
+        pathlib.Path("/run/mama").mkdir(parents=True, exist_ok=True)
         return run_mama
     except OSError:
         try:
