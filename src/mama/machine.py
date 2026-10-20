@@ -631,7 +631,6 @@ class Machine:
         elif attr in self.SETTABLE_FIELDS:
             label, prompt_msg, field_name = self.SETTABLE_FIELDS[attr]
             curr_val = getattr(self, field_name, "")
-            out(f"Current {label}: {curr_val if curr_val not in ('', None) else '(none)'}")
 
             if val is False or val == "":
                 if field_name == "only_vm":
