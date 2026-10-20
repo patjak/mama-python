@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import ipaddress
 import os
 import pathlib
@@ -10,6 +11,17 @@ from typing import Any, List, Optional, Union
 
 class Util:
     ANSI_COLORS: List[int] = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]
+
+    @staticmethod
+    def get_user() -> str:
+        """Return the active username, prioritizing SUDO_USER when executed under sudo."""
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user:
+            return sudo_user
+        try:
+            return getpass.getuser()
+        except Exception:
+            return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
 
     @staticmethod
     def is_root() -> bool:

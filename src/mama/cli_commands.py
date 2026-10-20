@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-import getpass
 import os
 import pathlib
 import subprocess
@@ -787,7 +786,7 @@ def cmd_reserve(arg: Union[str, bool]) -> None:
         if mach.reservation:
             fatal(f"Machine is already reserved by: {mach.reservation}")
 
-        user = getpass.getuser()
+        user = Util.get_user()
         mach.reserve(user)
 
 
@@ -798,7 +797,7 @@ def cmd_release(arg: Union[str, bool, None] = False, force: bool = False) -> Non
             fatal("Machine is not reserved")
 
         if not force:
-            user = getpass.getuser()
+            user = Util.get_user()
             if mach.reservation != user:
                 fatal(
                     "Failed to release machine. You do not hold the reservation. "
