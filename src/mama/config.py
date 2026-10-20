@@ -8,6 +8,11 @@ DB_FILE: str = f"{MAMA_PATH}/mama.db"
 MAMA_HOST: str = "192.168.2.1"
 TFTP_DIR: str = f"{MAMA_PATH}/tftp"  # Root directory served by dnsmasq TFTP
 
+# Package Cache Proxy (apt-cacher-ng)
+PACKAGE_PROXY_ENABLED: bool = True
+PACKAGE_PROXY_HOST: str = MAMA_HOST
+PACKAGE_PROXY_PORT: int = 3142
+
 # DHCP & dnsmasq Configuration (openSUSE)
 DHCP_ENABLED: bool = True
 DHCP_INTERFACE: str = "br0"

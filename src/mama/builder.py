@@ -47,6 +47,22 @@ def build_os(
         subprocess.run(cmd)
 
 
+def get_kiwi_proxy_args() -> list[str]:
+    """Return kiwi --setenv arguments for the package proxy if enabled."""
+    if not getattr(config, "PACKAGE_PROXY_ENABLED", False):
+        return []
+
+    proxy_host = getattr(config, "PACKAGE_PROXY_HOST", config.MAMA_HOST)
+    proxy_port = getattr(config, "PACKAGE_PROXY_PORT", 3142)
+    proxy_url = f"http://{proxy_host}:{proxy_port}"
+    return [
+        f"--setenv=http_proxy={proxy_url}",
+        f"--setenv=https_proxy={proxy_url}",
+        f"--setenv=HTTP_PROXY={proxy_url}",
+        f"--setenv=HTTPS_PROXY={proxy_url}",
+    ]
+
+
 def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     """Execute local Kiwi-ng build, mount proc/sys, chroot dracut initramfs generation, and install authorized_keys."""
     packages_list = [f"--add-package={p}" for p in packages.split()]
@@ -72,16 +88,21 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     with Os.lock(arch, os_name, shared=False):
         subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
 
-        kiwi_cmd = sudo_prefix + [
-            "kiwi-ng",
-            "--debug",
-            "system",
-            "prepare",
-            "--description",
-            str(desc),
-            "--root",
-            str(tmp_dir),
-        ] + packages_list
+        kiwi_cmd = (
+            sudo_prefix
+            + ["kiwi-ng"]
+            + get_kiwi_proxy_args()
+            + [
+                "--debug",
+                "system",
+                "prepare",
+                "--description",
+                str(desc),
+                "--root",
+                str(tmp_dir),
+            ]
+            + packages_list
+        )
 
         console = Console()
         with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
