@@ -362,15 +362,11 @@ def cmd_new() -> None:
         only_vm=only_vm,
     )
 
-    path = pathlib.Path(config.MAMA_PATH) / "machines" / name
+    path = pathlib.Path(getattr(config, "MACHINES_PATH", f"{config.MAMA_PATH}/machines")) / name
     if Util.is_root():
         path.mkdir(parents=True, exist_ok=True)
-        (path / "lock").touch(mode=0o666, exist_ok=True)
-        (path / "lock").chmod(0o666)
     else:
         subprocess.run(["sudo", "mkdir", "-p", str(path)])
-        subprocess.run(["sudo", "touch", str(path / "lock")])
-        subprocess.run(["sudo", "chmod", "666", str(path / "lock")])
 
     MachineRepository.add_machine(m)
     out("New machine created")
@@ -701,7 +697,7 @@ def cmd_log(
         subprocess.run(cmd)
     else:
         arg_name = str(arg) if isinstance(arg, str) and arg else "mama-log"
-        log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+        log_dir = pathlib.Path(getattr(config, "LOG_DIR", f"{config.MAMA_PATH}/log"))
         log_file = log_dir / arg_name
         if clear:
             vmlog_file = log_dir / f"{arg_name}-vmlog"

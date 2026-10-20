@@ -185,11 +185,26 @@ class Machine:
 
     @contextlib.contextmanager
     def lock(self):
-        lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
+        lock_dir = pathlib.Path(getattr(config, "LOCK_DIR", f"{config.RUN_DIR}/locks"))
         try:
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            lock_file = lock_dir / f"{self.name}.lock"
+        except (PermissionError, OSError):
+            legacy_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
+            if legacy_file.exists() and os.access(str(legacy_file), os.W_OK):
+                lock_file = legacy_file
+            else:
+                tmp_dir = pathlib.Path("/tmp/mama/locks")
+                try:
+                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                lock_file = tmp_dir / f"{self.name}.lock"
+
+        try:
             if not lock_file.exists():
                 lock_file.touch(mode=0o666, exist_ok=True)
+                lock_file.chmod(0o666)
         except Exception:
             pass
 
