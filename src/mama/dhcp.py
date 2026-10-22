@@ -252,8 +252,8 @@ class DnsmasqManager:
                 if current_ip != assigned_ip:
                     current_state = m_data.get("state", "")
                     fields_to_update: Dict[str, Any] = {"ip": assigned_ip}
-                    if not current_ip and current_state in ("", "powering-on", "starting-vm", "power-cycling", "offline"):
-                        fields_to_update["state"] = "dhcp-bound"
+                    if not current_ip and current_state in ("", "power-on", "vm-start", "cycling", "offline", "powering-on", "starting-vm", "power-cycling"):
+                        fields_to_update["state"] = "dhcp"
                     MachineRepository.update_fields(
                         m_data["name"],
                         fields_to_update,

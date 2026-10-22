@@ -147,7 +147,7 @@ def start_vm(mach: Machine) -> bool:
     now = int(time.time())
     mach.is_started = True
     mach.started_at = now
-    mach.set_state("starting-vm")
+    mach.set_state("vm-start")
     MachineRepository.update_fields(mach.name, {"_is_started": 1, "started_at": now})
 
     mach.out(f"Starting virtual machine with OS {mach.os} and kernel {mach.kernel}")
@@ -222,7 +222,7 @@ def start_vm(mach: Machine) -> bool:
     res = subprocess.run(qemu_cmd)
     if res.returncode != 0:
         mach.error("Failed to start QEMU daemon.")
-        mach.set_state("boot-failed")
+        mach.set_state("failed")
         mach.clear()
         return False
 
@@ -230,7 +230,7 @@ def start_vm(mach: Machine) -> bool:
 
     if get_vm_pid(mach.name) is None:
         mach.error("QEMU process exited immediately after starting.")
-        mach.set_state("boot-failed")
+        mach.set_state("failed")
         mach.clear()
         return False
 
@@ -252,7 +252,7 @@ def start_vm(mach: Machine) -> bool:
         mach.set("start-timeout", new_timeout)
         mach.debug(f"VM boot finished in {elapsed}s. Updated start timeout for {mach.os} to {new_timeout}s.")
     else:
-        mach.set_state("boot-failed")
+        mach.set_state("failed")
         kill_vm(mach.name)
         mach.clear()
 

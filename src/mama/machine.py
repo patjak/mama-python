@@ -42,6 +42,17 @@ class Machine:
     resource_wait_timeout: ClassVar[int] = 20 * 60 * 60
 
     BOOT_STATES: ClassVar[Tuple[str, ...]] = (
+        "power-on",
+        "vm-start",
+        "cycling",
+        "waiting",
+        "dhcp",
+        "ipxe",
+        "kernel",
+        "initrd",
+        "booting",
+        "nfs",
+        # Backward compatibility for legacy state strings
         "powering-on",
         "starting-vm",
         "power-cycling",
@@ -50,7 +61,6 @@ class Machine:
         "ipxe-boot-config",
         "fetching-kernel",
         "fetching-initrd",
-        "booting",
         "nfs-mounted",
     )
 
@@ -312,8 +322,8 @@ class Machine:
             if self.ip != ip:
                 self.debug(f"Changing IP {self.ip} -> {ip}")
                 self.set_ip(ip)
-                if self.is_started and self.state in ("powering-on", "starting-vm", "power-cycling", ""):
-                    self.set_state("dhcp-bound")
+                if self.is_started and self.state in ("power-on", "vm-start", "cycling", "powering-on", "starting-vm", "power-cycling", ""):
+                    self.set_state("dhcp")
 
         return ip
 
@@ -428,9 +438,9 @@ class Machine:
         if not ip:
             if self.is_booting():
                 return self.state
-            if self.state != "unresponsive":
-                self.set_state("unresponsive")
-            return "unresponsive"
+            if self.state not in ("unresp", "unresponsive"):
+                self.set_state("unresp")
+            return "unresp"
 
         ping_ok = self.is_pingable(ip)
         ssh_ok = (self.get_ssh_status() == "open") if ping_ok else False
@@ -442,16 +452,16 @@ class Machine:
 
         if self.is_booting():
             if self.is_nfs_mounted():
-                if self.state != "nfs-mounted":
-                    self.set_state("nfs-mounted")
+                if self.state not in ("nfs", "nfs-mounted"):
+                    self.set_state("nfs")
             return self.state
 
-        if self.state == "boot-failed":
-            return "boot-failed"
+        if self.state in ("failed", "boot-failed"):
+            return "failed"
 
-        if self.state != "unresponsive":
-            self.set_state("unresponsive")
-        return "unresponsive"
+        if self.state not in ("unresp", "unresponsive"):
+            self.set_state("unresp")
+        return "unresp"
 
     def get_status(self) -> str:
         return self.get_state()
@@ -467,7 +477,7 @@ class Machine:
         if dont_print:
             while self.get_state() != target_state:
                 curr_state = self.get_state()
-                if target_state == "online" and curr_state == "boot-failed":
+                if target_state == "online" and curr_state in ("failed", "boot-failed"):
                     return False
                 time_passed = time.time() - start_time
                 time.sleep(1)
@@ -482,7 +492,7 @@ class Machine:
                 if curr_state == target_state:
                     break
 
-                if target_state == "online" and curr_state == "boot-failed":
+                if target_state == "online" and curr_state in ("failed", "boot-failed"):
                     self.error(f"({self.name}) Boot sequence failed.")
                     return False
 
@@ -511,22 +521,29 @@ class Machine:
             return "[bold green]online[/bold green]"
         elif state == "offline":
             return "[dim red]offline[/dim red]"
-        elif state in ("unresponsive", "unreachable", "boot-failed"):
+        elif state in ("unresp", "unreach", "failed", "unresponsive", "unreachable", "boot-failed"):
             return f"[bold red]{state}[/bold red]"
-        elif state == "stopping":
+        elif state in ("stopping", "stop"):
             return "[yellow]stopping[/yellow]"
-        elif state.startswith("fetching-"):
+        elif state in ("kernel", "initrd") or state.startswith("fetching-"):
             return f"[bold cyan]{state}[/bold cyan]"
-        elif state == "nfs-mounted":
-            return "[bold blue]nfs-mounted[/bold blue]"
+        elif state in ("nfs", "nfs-mounted"):
+            return "[bold blue]nfs[/bold blue]"
         elif state in (
+            "power-on",
+            "vm-start",
+            "cycling",
+            "waiting",
+            "dhcp",
+            "ipxe",
+            "booting",
+            # Backward compatibility
             "powering-on",
             "starting-vm",
             "power-cycling",
             "waiting-for-resources",
             "dhcp-bound",
             "ipxe-boot-config",
-            "booting",
         ):
             return f"[bold yellow]{state}[/bold yellow]"
         return f"[cyan]{state}[/cyan]" if state else "[dim]-[/dim]"
@@ -786,10 +803,10 @@ class Machine:
         if timeout is None:
             timeout = self.resource_wait_timeout
 
-        if not self.resources.strip():
+        if not self.resources:
             return True
 
-        self.set_state("waiting-for-resources")
+        self.set_state("waiting")
 
         console = Console()
         start_time = time.time()
@@ -843,8 +860,8 @@ class Machine:
             self.error("No kernel set for machine")
             return False
 
-        if curr_state in ("unresponsive", "unreachable"):
-            self.set_state("power-cycling")
+        if curr_state in ("unresp", "unreach", "unresponsive", "unreachable"):
+            self.set_state("cycling")
             self.stop()
             self.debug(f"Waiting for power cycle delay: {self.power_cycle_delay}")
             time.sleep(self.power_cycle_delay)
@@ -862,7 +879,7 @@ class Machine:
         MachineRepository.update_fields(self.name, {"_is_started": 1, "started_at": now})
 
         if curr_state == "offline":
-            self.set_state("powering-on")
+            self.set_state("power-on")
             if self.startcmd:
                 startcmd = self._preprocess_cmd(self.startcmd)
                 self.debug(f"Start command: {startcmd}")
@@ -888,7 +905,7 @@ class Machine:
                 f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
             )
         else:
-            self.set_state("boot-failed")
+            self.set_state("failed")
             self.stop()
 
         return ret

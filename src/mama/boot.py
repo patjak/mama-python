@@ -47,21 +47,21 @@ class iPXEHandler(BaseHTTPRequestHandler):
                 if len(parts) >= 2 and parts[0] == "machines":
                     mach_name = parts[1]
                     if fname.startswith("initrd"):
-                        Machine.set_state_by_name(mach_name, "fetching-initrd")
+                        Machine.set_state_by_name(mach_name, "initrd")
                     elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
-                        Machine.set_state_by_name(mach_name, "fetching-kernel")
+                        Machine.set_state_by_name(mach_name, "kernel")
                     else:
-                        Machine.set_state_by_name(mach_name, f"fetching-{fname}")
+                        Machine.set_state_by_name(mach_name, fname)
                 else:
                     client_ip = self.client_address[0]
                     client_mac = net_mgr.clean_mac(net_mgr.get_mac_from_ip(client_ip))
                     if client_mac:
                         if fname.startswith("initrd"):
-                            Machine.set_state_by_mac(client_mac, "fetching-initrd")
+                            Machine.set_state_by_mac(client_mac, "initrd")
                         elif fname.startswith(("vmlinuz", "Image", "vmlinux")):
-                            Machine.set_state_by_mac(client_mac, "fetching-kernel")
+                            Machine.set_state_by_mac(client_mac, "kernel")
                         else:
-                            Machine.set_state_by_mac(client_mac, f"fetching-{fname}")
+                            Machine.set_state_by_mac(client_mac, fname)
             except Exception as e:
                 sys.stderr.write(f"[boot.py] Error updating state for static file transfer: {e}\n")
 
@@ -106,7 +106,7 @@ class iPXEHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            Machine.set_state_by_mac(mac, "ipxe-boot-config")
+            Machine.set_state_by_mac(mac, "ipxe")
             if getattr(config, "DHCP_ENABLED", True):
                 DnsmasqManager.sync_leases_to_db()
         except Exception as e:
