@@ -1003,7 +1003,12 @@ class Machine:
                     time.sleep(10)
                     self.load()
 
-    def ssh_cmd(self, cmd: str, no_timeout: bool = False) -> Union[int, bool]:
+    def ssh_cmd(
+        self,
+        cmd: str,
+        no_timeout: bool = False,
+        timeout_mins: Optional[int] = None,
+    ) -> Union[int, bool]:
         if self.get_ssh_status() != "open":
             if not self.wait_for_state("online", 30, dont_print=True):
                 self.error("Unable to execute ssh cmd since machine is not online.")
@@ -1015,11 +1020,13 @@ class Machine:
             self.error("No IP address available to execute ssh cmd.")
             return False
 
+        effective_timeout = timeout_mins if timeout_mins is not None else self.ssh_cmd_timeout
+
         logfile = getattr(Log, "logfile", False)
         return net_mgr.run_ssh_cmd(
             ip=ip,
             cmd=cmd,
-            timeout_mins=self.ssh_cmd_timeout,
+            timeout_mins=effective_timeout,
             no_timeout=no_timeout,
             logfile=logfile,
         )

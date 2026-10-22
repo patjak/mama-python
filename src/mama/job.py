@@ -23,6 +23,7 @@ class Job:
         args: str = "",
         no_ssh_timeout: bool = False,
         no_retry: bool = False,
+        timeout: Optional[int] = None,
     ) -> None:
         self.name: str = name
         self.type: str = ""
@@ -32,6 +33,7 @@ class Job:
         self.args: str = args
         self.no_ssh_timeout: bool = no_ssh_timeout
         self.no_retry: bool = no_retry
+        self.timeout: Optional[int] = timeout
 
     def _is_active_job(self, job_str: str, mach: Any = False) -> bool:
         machs = Machine.get_all()
@@ -295,10 +297,10 @@ class Job:
             res_code = 0
 
             if context == "DEVICE" and mach:
-                res_code = mach.ssh_cmd(line, no_timeout=self.no_ssh_timeout)
+                res_code = mach.ssh_cmd(line, no_timeout=self.no_ssh_timeout, timeout_mins=self.timeout)
                 mach_for_log = mach
             elif context == "WORKER" and worker:
-                res_code = worker.ssh_cmd(line, no_timeout=self.no_ssh_timeout)
+                res_code = worker.ssh_cmd(line, no_timeout=self.no_ssh_timeout, timeout_mins=self.timeout)
                 mach_for_log = worker
 
             if context in ("DEVICE", "WORKER"):

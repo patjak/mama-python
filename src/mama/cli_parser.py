@@ -142,6 +142,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
 
     job_p = subparsers.add_parser("job", parents=[parent_parser], help="Execute job workflows", formatter_class=HELP_FORMATTER)
     job_p.add_argument("job_name", help="Job name")
+    job_p.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Command execution timeout in minutes for jobs (default: 60)",
+    )
     job_sub = job_p.add_subparsers(dest="job_action", help="Job action", metavar="<action>")
 
     prep_p = job_sub.add_parser("prepare", parents=[parent_parser], help="Execute prepare job", formatter_class=HELP_FORMATTER)
@@ -151,6 +157,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     prep_p_os.completer = os_completer
     prep_p_worker = prep_p.add_argument("worker", nargs="?", default="jobs", help="Worker machine name")
     prep_p_worker.completer = machine_completer
+    prep_p.add_argument(
+        "--timeout",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Command execution timeout in minutes for jobs (default: 60)",
+    )
 
     run_p = job_sub.add_parser("run", parents=[parent_parser], help="Execute run job", formatter_class=HELP_FORMATTER)
     run_p_mach = run_p.add_argument("machine", help="Target machine")
@@ -159,6 +171,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     run_p_arch.completer = arch_completer
     run_p_os = run_p.add_argument("os", help="Target OS")
     run_p_os.completer = os_completer
+    run_p.add_argument(
+        "--timeout",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Command execution timeout in minutes for jobs (default: 60)",
+    )
 
     p_build = subparsers.add_parser("build-os", parents=[parent_parser], help="Build a deployable OS", formatter_class=HELP_FORMATTER)
     p_build_arch = p_build.add_argument("arch", help="Architecture")

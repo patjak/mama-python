@@ -89,6 +89,7 @@ def main() -> None:
                 worker=args.worker,
                 args=args.args,
                 no_ssh_timeout=args.no_ssh_timeout,
+                timeout=getattr(args, "timeout", None),
             )
         elif args.job_action == "run":
             cli_commands.cmd_job_run(
@@ -99,6 +100,7 @@ def main() -> None:
                 args=args.args,
                 no_ssh_timeout=args.no_ssh_timeout,
                 no_retry=args.no_retry,
+                timeout=getattr(args, "timeout", None),
             )
         else:
             parser.parse_args(["job", "--help"])

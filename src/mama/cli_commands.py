@@ -546,8 +546,9 @@ def cmd_job_prepare(
     worker: str = "jobs",
     args: str = "",
     no_ssh_timeout: bool = False,
+    timeout: Optional[int] = None,
 ) -> None:
-    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout)
+    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout, timeout=timeout)
     job.type = "prepare"
     job.arch = arch
     job.os = os_name
@@ -563,8 +564,9 @@ def cmd_job_run(
     args: str = "",
     no_ssh_timeout: bool = False,
     no_retry: bool = False,
+    timeout: Optional[int] = None,
 ) -> None:
-    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout, no_retry=no_retry)
+    job = Job(job_name, args=args, no_ssh_timeout=no_ssh_timeout, no_retry=no_retry, timeout=timeout)
     job.type = "run"
     job.mach = machine
     job.arch = arch
