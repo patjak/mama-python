@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mama"
+version = "0.1.0"
+description = "MAMA - Machine Administration & Management Architecture"
+requires-python = ">=3.9"
+authors = [
+    { name = "Patrik Jakobsson", email = "pjakobsson@suse.de" },
+]
+dependencies = [
+    "rich>=10.0.0",
+    "questionary>=1.10.0",
+]
+
+[project.optional-dependencies]
+cli = [
+    "rich-argparse>=1.0.0",
+    "argcomplete>=2.0.0",
+]
+
+[project.scripts]
+mama = "mama.main:main"
+mama-boot = "mama.boot:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
