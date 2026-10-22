@@ -129,6 +129,21 @@ class JobQueue:
         return valid_entries
 
     @classmethod
+    def get_queue_counts(cls) -> Dict[str, int]:
+        """Return a mapping of machine_name to the number of active queued jobs."""
+        entries = cls.get_queue()
+        counts: Dict[str, int] = {}
+        for entry in entries:
+            m_name = entry["machine_name"]
+            counts[m_name] = counts.get(m_name, 0) + 1
+        return counts
+
+    @classmethod
+    def get_queue_count(cls, machine_name: str) -> int:
+        """Return the number of active queued jobs for a specific machine."""
+        return len(cls.get_queue(machine_name))
+
+    @classmethod
     @contextlib.contextmanager
     def track(cls, machine_name: str, job_str: str):
         pid = os.getpid()

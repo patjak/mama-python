@@ -193,11 +193,16 @@ def cmd_list(
     table.add_column("Up", justify="right")
     table.add_column("Pwr", justify="right", style="yellow")
     table.add_column("VM", justify="center")
+    table.add_column("Queue", justify="right")
     table.add_column("Job", style="italic")
 
     machs = Machine.get_all()
+    queue_counts = JobQueue.get_queue_counts()
 
     def fetch_mach_info(mach: Machine) -> dict:
+        q_count = queue_counts.get(mach.name, 0)
+        queue_str = f"[bold yellow]{q_count}[/bold yellow]" if q_count > 0 else "[dim]0[/dim]"
+
         if fast:
             if not mach.is_started and mach.ip:
                 mach.set_ip("")
@@ -226,6 +231,7 @@ def cmd_list(
                 "uptime_str": uptime_str,
                 "power": "-",
                 "vm_str": vm_str,
+                "queue_str": queue_str,
                 "job_str": job_str,
             }
 
@@ -253,6 +259,7 @@ def cmd_list(
             "uptime_str": uptime_str,
             "power": power,
             "vm_str": vm_str,
+            "queue_str": queue_str,
             "job_str": job_str,
         }
 
@@ -273,6 +280,7 @@ def cmd_list(
             data["uptime_str"],
             data["power"],
             data["vm_str"],
+            data["queue_str"],
             data["job_str"],
         ])
         table.add_row(*row)

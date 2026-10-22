@@ -119,6 +119,7 @@ class TestCmdListColumns(unittest.TestCase):
             self.assertNotIn("IP", col_headers)
             self.assertNotIn("MAC", col_headers)
             self.assertIn("Up", col_headers)
+            self.assertIn("Queue", col_headers)
             self.assertIn("Name", col_headers)
 
     def test_verbose_list_includes_ip_and_mac(self):
@@ -133,7 +134,53 @@ class TestCmdListColumns(unittest.TestCase):
             self.assertIn("IP", col_headers)
             self.assertIn("MAC", col_headers)
             self.assertIn("Up", col_headers)
+            self.assertIn("Queue", col_headers)
             self.assertIn("Name", col_headers)
+
+    def test_list_queue_count_display(self):
+        from unittest.mock import patch
+        from rich.console import Console
+        from mama import cli_commands
+        from mama.job_queue import JobQueue
+
+        # Enqueue 2 jobs with current PID so they are considered active
+        JobQueue.enqueue("m1", "job A", os.getpid())
+
+        with patch.object(Console, "print") as mock_print:
+            cli_commands.cmd_list(fast=True, verbose=False)
+            table = mock_print.call_args[0][0]
+            # Column headers: No., Name, State, On, Up, Pwr, VM, Queue, Job
+            queue_idx = [col.header for col in table.columns].index("Queue")
+            row_cells = list(table.columns[queue_idx]._cells)
+            self.assertIn("1", row_cells[0])
+
+
+class TestJobQueueCounts(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.orig_mama_path = getattr(config, "MAMA_PATH", "/usr/share/mama")
+        self.orig_db_file = getattr(config, "DB_FILE", f"{self.orig_mama_path}/mama.db")
+        config.MAMA_PATH = self.tmp_dir.name
+        config.DB_FILE = os.path.join(self.tmp_dir.name, "mama.db")
+
+    def tearDown(self):
+        config.MAMA_PATH = self.orig_mama_path
+        config.DB_FILE = self.orig_db_file
+        self.tmp_dir.cleanup()
+
+    def test_queue_counts(self):
+        from mama.job_queue import JobQueue
+
+        self.assertEqual(JobQueue.get_queue_counts(), {})
+        self.assertEqual(JobQueue.get_queue_count("m1"), 0)
+
+        JobQueue.enqueue("m1", "job1", os.getpid())
+        self.assertEqual(JobQueue.get_queue_counts(), {"m1": 1})
+        self.assertEqual(JobQueue.get_queue_count("m1"), 1)
+
+        JobQueue.dequeue("m1", os.getpid())
+        self.assertEqual(JobQueue.get_queue_counts(), {})
+        self.assertEqual(JobQueue.get_queue_count("m1"), 0)
 
 
 if __name__ == "__main__":
