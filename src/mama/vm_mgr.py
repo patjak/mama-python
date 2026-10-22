@@ -144,9 +144,11 @@ def start_vm(mach: Machine) -> bool:
     except Exception as e:
         mach.debug(f"Could not prepare pidfile directory {pid_path.parent}: {e}")
 
+    now = int(time.time())
     mach.is_started = True
+    mach.started_at = now
     mach.set_state("starting-vm")
-    MachineRepository.update_fields(mach.name, {"_is_started": 1})
+    MachineRepository.update_fields(mach.name, {"_is_started": 1, "started_at": now})
 
     mach.out(f"Starting virtual machine with OS {mach.os} and kernel {mach.kernel}")
 

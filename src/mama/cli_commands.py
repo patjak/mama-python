@@ -188,6 +188,7 @@ def cmd_list(
     table.add_column("MAC", style="magenta")
     table.add_column("State")
     table.add_column("On", justify="center")
+    table.add_column("Up", justify="right")
     table.add_column("Pwr", justify="right", style="yellow")
     table.add_column("VM", justify="center")
     table.add_column("Job", style="italic")
@@ -206,6 +207,8 @@ def cmd_list(
             state_str = Machine.format_state(raw_state)
 
             started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
+            uptime = mach.get_uptime() if mach.is_started else None
+            uptime_str = f"[green]{format_duration(uptime, max_units=2)}[/green]" if uptime is not None else "[dim]-[/dim]"
             vm_str = "[cyan]Yes[/cyan]" if mach.only_vm else "[dim]-[/dim]"
 
             job_str = mach.job or "-"
@@ -218,6 +221,7 @@ def cmd_list(
                 "mac": mach.mac,
                 "state_str": state_str,
                 "started_str": started_str,
+                "uptime_str": uptime_str,
                 "power": "-",
                 "vm_str": vm_str,
                 "job_str": job_str,
@@ -228,6 +232,8 @@ def cmd_list(
         state_str = Machine.format_state(state)
 
         started_str = "[green]Yes[/green]" if mach.is_started else "[dim]-[/dim]"
+        uptime = mach.get_uptime() if mach.is_started else None
+        uptime_str = f"[green]{format_duration(uptime, max_units=2)}[/green]" if uptime is not None else "[dim]-[/dim]"
         vm_str = "[cyan]Yes[/cyan]" if mach.is_vm() else "[dim]-[/dim]"
 
         job_str = mach.job or "-"
@@ -242,6 +248,7 @@ def cmd_list(
             "mac": mach.mac,
             "state_str": state_str,
             "started_str": started_str,
+            "uptime_str": uptime_str,
             "power": power,
             "vm_str": vm_str,
             "job_str": job_str,
@@ -262,6 +269,7 @@ def cmd_list(
             data["mac"],
             data["state_str"],
             data["started_str"],
+            data["uptime_str"],
             data["power"],
             data["vm_str"],
             data["job_str"],

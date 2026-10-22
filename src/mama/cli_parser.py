@@ -27,7 +27,7 @@ from .repository import MachineRepository
 from .util import Util
 
 
-def format_duration(seconds: int) -> str:
+def format_duration(seconds: int, max_units: Optional[int] = None) -> str:
     """Format duration into human-readable compact units (e.g., 45s, 12m 30s, 2h 15m)."""
     if seconds < 0:
         return "0s"
@@ -43,6 +43,8 @@ def format_duration(seconds: int) -> str:
         parts.append(f"{minutes}m")
     if secs > 0 or not parts:
         parts.append(f"{secs}s")
+    if max_units and max_units > 0:
+        parts = parts[:max_units]
     return " ".join(parts)
 
 

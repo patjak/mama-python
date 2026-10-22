@@ -89,6 +89,7 @@ class Machine:
     powercmd: str = ""
     start_timeout: int = 240
     stop_timeout: int = 30
+    started_at: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.mac = net_mgr.clean_mac(self.mac)
@@ -120,6 +121,14 @@ class Machine:
         except (ValueError, TypeError):
             stop_tout = cls.stop_timeout_default
 
+        raw_started_at = data.get("started_at")
+        started_at = None
+        if raw_started_at is not None and str(raw_started_at).strip() not in ("", "None"):
+            try:
+                started_at = int(raw_started_at)
+            except (ValueError, TypeError):
+                started_at = None
+
         return cls(
             name=str(data.get("name") or ""),
             mac=net_mgr.clean_mac(str(data.get("mac") or "")),
@@ -141,6 +150,7 @@ class Machine:
             powercmd=str(data.get("powercmd") or ""),
             start_timeout=start_tout,
             stop_timeout=stop_tout,
+            started_at=started_at,
         )
 
     def fill_from_dict(self, data: Dict[str, Any]) -> None:
@@ -153,6 +163,7 @@ class Machine:
         d["only_vm"] = 1 if self.only_vm else 0
         d["is_started"] = 1 if self.is_started else 0
         d["_is_started"] = 1 if self.is_started else 0
+        d["started_at"] = self.started_at
         return d
 
     def _preprocess_cmd(self, cmd: str) -> str:
@@ -263,8 +274,9 @@ class Machine:
     def clear(self) -> None:
         self.ip = ""
         self.is_started = False
+        self.started_at = None
         self.state = "offline"
-        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": 0, "state": "offline"})
+        MachineRepository.update_fields(self.name, {"ip": "", "_is_started": 0, "started_at": None, "state": "offline"})
         self.debug("cleared machine state")
 
     def clear_job(self) -> None:
@@ -328,6 +340,60 @@ class Machine:
         except Exception:
             pass
         return "-"
+
+    def get_uptime(self) -> Optional[int]:
+        """Return duration in seconds since the machine was started, or None if not running."""
+        if not self.is_started:
+            return None
+
+        now = int(time.time())
+        if self.started_at:
+            return max(0, now - self.started_at)
+
+        # Fallback to boot_history for open session
+        try:
+            with MachineRepository._get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT timestamp FROM boot_history
+                    WHERE machine_name = ? AND stop_duration IS NULL
+                    ORDER BY timestamp DESC LIMIT 1;
+                    """,
+                    (self.name,),
+                ).fetchone()
+                if row and row["timestamp"]:
+                    return max(0, now - int(row["timestamp"]))
+        except Exception:
+            pass
+
+        # Fallback to latest boot_history timestamp
+        try:
+            with MachineRepository._get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT timestamp FROM boot_history
+                    WHERE machine_name = ?
+                    ORDER BY timestamp DESC LIMIT 1;
+                    """,
+                    (self.name,),
+                ).fetchone()
+                if row and row["timestamp"]:
+                    return max(0, now - int(row["timestamp"]))
+        except Exception:
+            pass
+
+        # Fallback for VMs: check pidfile mtime if VM process is running
+        if self.is_vm():
+            pid = self.get_vm_pid()
+            if pid:
+                pid_file = self.get_vmpid_path()
+                if pid_file.exists():
+                    try:
+                        return max(0, now - int(pid_file.stat().st_mtime))
+                    except OSError:
+                        pass
+
+        return None
 
     def is_pingable(self, ip: Optional[str] = None) -> bool:
         target_ip = ip or self.get_ip()
@@ -790,8 +856,10 @@ class Machine:
         if not self.wait_for_resources():
             return False
 
+        now = int(time.time())
         self.is_started = True
-        MachineRepository.update_fields(self.name, {"_is_started": 1})
+        self.started_at = now
+        MachineRepository.update_fields(self.name, {"_is_started": 1, "started_at": now})
 
         if curr_state == "offline":
             self.set_state("powering-on")

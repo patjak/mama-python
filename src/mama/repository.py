@@ -49,15 +49,18 @@ class MachineRepository:
                     powercmd TEXT DEFAULT '',
                     start_timeout INTEGER DEFAULT 240,
                     stop_timeout INTEGER DEFAULT 30,
-                    _is_started INTEGER DEFAULT 0
+                    _is_started INTEGER DEFAULT 0,
+                    started_at INTEGER DEFAULT NULL
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_machines_mac ON machines(mac);")
 
-            # Check if stop_timeout exists in machines table
+            # Check if stop_timeout and started_at exist in machines table
             mach_cols = [col["name"] for col in conn.execute("PRAGMA table_info(machines);").fetchall()]
             if "stop_timeout" not in mach_cols:
                 conn.execute("ALTER TABLE machines ADD COLUMN stop_timeout INTEGER DEFAULT 30;")
+            if "started_at" not in mach_cols:
+                conn.execute("ALTER TABLE machines ADD COLUMN started_at INTEGER DEFAULT NULL;")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS boot_history (
@@ -176,9 +179,15 @@ class MachineRepository:
             "name", "mac", "ip", "arch", "os", "kernel",
             "reservation", "resources", "boot_params", "vm_params",
             "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
-            "start_timeout", "stop_timeout", "_is_started"
+            "start_timeout", "stop_timeout", "_is_started", "started_at"
         ]
-        vals = [str(m_dict.get(col, "") or "") for col in columns]
+        vals = []
+        for col in columns:
+            val = m_dict.get(col)
+            if col == "started_at":
+                vals.append(int(val) if val is not None and str(val).strip() not in ("", "None") else None)
+            else:
+                vals.append(str(val if val is not None else ""))
         placeholders = ", ".join(["?"] * len(columns))
         col_names = ", ".join(columns)
         update_assignments = ", ".join([f"{col}=EXCLUDED.{col}" for col in columns if col != "name"])
@@ -205,7 +214,7 @@ class MachineRepository:
                 "name", "mac", "ip", "arch", "os", "kernel",
                 "reservation", "resources", "boot_params", "vm_params",
                 "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
-                "start_timeout", "stop_timeout"
+                "start_timeout", "stop_timeout", "started_at"
             ]
             m_dict = {attr: getattr(machine, attr, "") for attr in attrs}
             m_dict["_is_started"] = getattr(machine, "_is_started", "0")
@@ -247,6 +256,10 @@ class MachineRepository:
                 VALUES (?, ?, ?, ?, NULL, ?, NULL, ?);
                 """,
                 (machine_name, clean_os, boot_type, int(duration), now_epoch, created_at_str),
+            )
+            conn.execute(
+                "UPDATE machines SET started_at = ? WHERE name = ?;",
+                (now_epoch, machine_name),
             )
             # Prune old records beyond the last 20 samples
             conn.execute(
@@ -306,6 +319,10 @@ class MachineRepository:
                     """,
                     (machine_name, clean_os, boot_type, int(duration), now_epoch, now_epoch, created_at_str),
                 )
+            conn.execute(
+                "UPDATE machines SET started_at = NULL WHERE name = ?;",
+                (machine_name,),
+            )
             conn.commit()
 
     # Backwards compatibility alias
