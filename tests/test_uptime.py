@@ -87,5 +87,54 @@ class TestMachineUptime(unittest.TestCase):
         self.assertLess(uptime, 310)
 
 
+class TestCmdListColumns(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.orig_mama_path = getattr(config, "MAMA_PATH", "/usr/share/mama")
+        self.orig_db_file = getattr(config, "DB_FILE", f"{self.orig_mama_path}/mama.db")
+        self.orig_dhcp = getattr(config, "DHCP_ENABLED", True)
+        config.MAMA_PATH = self.tmp_dir.name
+        config.DB_FILE = os.path.join(self.tmp_dir.name, "mama.db")
+        config.DHCP_ENABLED = False
+        MachineRepository.init_db()
+
+        mach = Machine(name="m1", mac="00:11:22:33:44:55", ip="192.168.2.50", is_started=True)
+        MachineRepository.add_machine(mach)
+
+    def tearDown(self):
+        config.MAMA_PATH = self.orig_mama_path
+        config.DB_FILE = self.orig_db_file
+        config.DHCP_ENABLED = self.orig_dhcp
+        self.tmp_dir.cleanup()
+
+    def test_default_list_skips_ip_and_mac(self):
+        from unittest.mock import patch
+        from rich.console import Console
+        from mama import cli_commands
+
+        with patch.object(Console, "print") as mock_print:
+            cli_commands.cmd_list(fast=True, verbose=False)
+            table = mock_print.call_args[0][0]
+            col_headers = [col.header for col in table.columns]
+            self.assertNotIn("IP", col_headers)
+            self.assertNotIn("MAC", col_headers)
+            self.assertIn("Up", col_headers)
+            self.assertIn("Name", col_headers)
+
+    def test_verbose_list_includes_ip_and_mac(self):
+        from unittest.mock import patch
+        from rich.console import Console
+        from mama import cli_commands
+
+        with patch.object(Console, "print") as mock_print:
+            cli_commands.cmd_list(fast=True, verbose=True)
+            table = mock_print.call_args[0][0]
+            col_headers = [col.header for col in table.columns]
+            self.assertIn("IP", col_headers)
+            self.assertIn("MAC", col_headers)
+            self.assertIn("Up", col_headers)
+            self.assertIn("Name", col_headers)
+
+
 if __name__ == "__main__":
     unittest.main()

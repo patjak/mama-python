@@ -63,6 +63,7 @@ def main() -> None:
             item=args.item,
             target=args.target,
             fast=args.fast,
+            verbose=getattr(args, "verbose", False),
         )
 
     elif args.command == "queue":

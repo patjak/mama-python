@@ -140,6 +140,7 @@ def cmd_list(
     item: Union[str, bool, None] = "machines",
     target: Union[str, bool, None] = False,
     fast: bool = False,
+    verbose: bool = False,
 ) -> None:
     """Unified listing handler for machines, OS templates, kernels, and resources."""
     if isinstance(item, bool):
@@ -184,8 +185,9 @@ def cmd_list(
     )
     table.add_column("No.", justify="right", style="dim")
     table.add_column("Name", style="bold white")
-    table.add_column("IP", style="green")
-    table.add_column("MAC", style="magenta")
+    if verbose:
+        table.add_column("IP", style="green")
+        table.add_column("MAC", style="magenta")
     table.add_column("State")
     table.add_column("On", justify="center")
     table.add_column("Up", justify="right")
@@ -262,18 +264,18 @@ def cmd_list(
             results = list(executor.map(fetch_mach_info, machs))
 
     for i, data in enumerate(results, start=1):
-        table.add_row(
-            str(i),
-            data["name"],
-            data["ip"],
-            data["mac"],
+        row = [str(i), data["name"]]
+        if verbose:
+            row.extend([data["ip"], data["mac"]])
+        row.extend([
             data["state_str"],
             data["started_str"],
             data["uptime_str"],
             data["power"],
             data["vm_str"],
             data["job_str"],
-        )
+        ])
+        table.add_row(*row)
 
     console.print(table)
 

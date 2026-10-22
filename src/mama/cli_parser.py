@@ -118,6 +118,12 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     )
     p_list_target.completer = machine_completer
     p_list.add_argument("--fast", action="store_true", help="Skip querying power data for faster refresh (machines only)")
+    p_list.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show verbose output including IP and MAC addresses",
+    )
 
     p_queue = subparsers.add_parser("queue", parents=[parent_parser], help="View queued waiting jobs", formatter_class=HELP_FORMATTER)
     p_queue_mach = p_queue.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
