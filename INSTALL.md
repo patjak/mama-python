@@ -6,16 +6,16 @@ This guide walks through installing and configuring **MAMA (Machine Administrati
 
 ## Architecture Overview
 
-Modern MAMA has been completely rewritten in Python 3. It replaces the legacy PHP/Apache/ISC-DHCP stack with lightweight, native services:
+MAMA relies on the following core services to provide network booting, state tracking, and storage management:
 
-| Component | Legacy MAMA | Modern MAMA (Python 3) | Purpose |
-|---|---|---|---|
-| **Runtime** | PHP 8 (`php-cli`, `apache2-mod_php8`) | Python 3 (`python3-setuptools`, `rich`, `questionary`) | CLI management & automation |
-| **HTTP Server** | Apache 2 (`/srv/www/htdocs/mama`) | Built-in Python HTTP server (`mama-boot.service`) | Serves iPXE scripts, kernels, initrd |
-| **DHCP & TFTP** | ISC `dhcp-server` + `atftpd` | `dnsmasq` (`/etc/dnsmasq.d/mama.conf`) | DHCP leases & TFTP firmware delivery |
-| **Database** | XML (`mama.xml`) | SQLite (`/usr/share/mama/mama.db`) | State, inventory, queues, and leases |
-| **Root Filesystem** | NFSv4 (`nfs-kernel-server`) | NFSv4 (`nfs-kernel-server`) | Root filesystems for booted targets |
-| **Virtualization** | QEMU (`qemu-x86`, `qemu-arm`) | QEMU / KVM (`qemu-x86`, `qemu-arm`) | Virtual machine test targets |
+| Component | Service / Technology | Purpose |
+|---|---|---|
+| **CLI & Runtime** | Python CLI (`rich`, `questionary`) | Management, automation, and interactive commands |
+| **HTTP Boot Server** | `mama-boot.service` (port 8080) | Serves dynamic iPXE scripts, kernels, and initrds |
+| **DHCP & TFTP** | `dnsmasq` (`/etc/dnsmasq.d/mama.conf`) | Managed DHCP IP leases and TFTP firmware delivery |
+| **Database** | SQLite (`/usr/share/mama/mama.db`) | State tracking, machine inventory, queues, and history |
+| **Root Filesystem** | NFSv4 (`nfs-kernel-server`) | Shared root filesystems for booted targets |
+| **Virtualization** | QEMU / KVM (`qemu-x86`, `qemu-arm`) | Local virtual test machines |
 
 ---
 
