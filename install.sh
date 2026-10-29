@@ -38,10 +38,16 @@ echo "Applying non-recursive permissions on /usr/share/mama..."
 chgrp mama /usr/share/mama /usr/share/mama/log
 chmod 2775 /usr/share/mama /usr/share/mama/log
 
-# Ensure existing database files are readable and writable by group 'mama'
+# Ensure existing database files and logs are readable and writable by group 'mama'
 if compgen -G "/usr/share/mama/mama.db*" >/dev/null; then
     chgrp mama /usr/share/mama/mama.db*
     chmod 0664 /usr/share/mama/mama.db*
+fi
+
+if [ -d /usr/share/mama/log ]; then
+    chgrp -R mama /usr/share/mama/log
+    chmod 2775 /usr/share/mama/log
+    find /usr/share/mama/log -type f -exec chmod 0664 {} +
 fi
 
 # 4. Systemd Service Installation

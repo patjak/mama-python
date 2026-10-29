@@ -115,6 +115,22 @@ class Log:
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             handler = MamaFileHandler(str(log_path), mode="a", encoding="utf-8")
+            try:
+                cur_mode = log_path.stat().st_mode
+                if not (cur_mode & 0o020):
+                    os.chmod(str(log_path), cur_mode | 0o020 | 0o040 | 0o004)
+            except OSError:
+                pass
+
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                try:
+                    import grp
+                    mama_gid = grp.getgrnam("mama").gr_gid
+                    if log_path.stat().st_gid != mama_gid:
+                        os.chown(str(log_path), -1, mama_gid)
+                except Exception:
+                    pass
+
             handler.setFormatter(MamaFileFormatter())
             handler.setLevel(logging.DEBUG)
             logger.addHandler(handler)
