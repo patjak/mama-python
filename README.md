@@ -2,120 +2,61 @@
 
 MAMA is an automated provisioning, network booting (iPXE/NFS), and machine management framework for bare-metal and virtual (QEMU/KVM) test machines.
 
+MAMA provides a centralized CLI and background services to manage bare-metal devices and virtual machines, schedule automated test jobs, dynamically provision root filesystems over NFS, and monitor boot cycles.
+
 ---
 
-## Architecture & Directory Layout
+## Key Features
 
-All operational assets and target root filesystems reside under `/usr/share/mama` (which is exported over NFS to target and worker machines):
+- **Dynamic Network Booting:** Built-in HTTP server (`mama-boot.service`) generates machine-specific iPXE configurations on the fly and delivers kernels and initrds.
+- **Integrated DHCP & TFTP:** Automatically configures and syncs `dnsmasq` (`mama dhcp sync`) for static IP leases and TFTP firmware delivery.
+- **NFSv4 Root Filesystems:** Shares extracted guest OS root filesystems directly over NFSv4, avoiding disk flashing for rapid test iterations.
+- **Real-Time Lifecycle Tracking:** Live status monitoring across provisioning, network booting, and online operational states.
+- **Adaptive Boot Timeouts:** Records rolling boot history in SQLite to calculate dynamic, target-specific boot timeouts.
+- **Automated Jobs & Queues:** Built-in job engine supporting automated preparation and execution phases with per-machine FIFO queues and configurable timeouts.
+- **Multi-User Permissions:** Targeted group-level access via the `mama` system group allows developers to manage machines and view logs without `sudo`.
+
+---
+
+## Jobs
+
+MAMA includes an automated job runner designed for executing test suites (such as IGT GPU Tools), OS building tasks, and benchmark scripts across configured machines:
+
+- **Two-Phase Workflow:** Jobs support separate `prepare` (building artifacts or setting up prerequisites, typically on a dedicated builder or worker machine) and `run` phases (executing test commands on the target hardware).
+- **Queuing & Concurrency:** Each target machine features an active FIFO job queue. Jobs are queued and dispatched sequentially, with live queue depth reported in machine listings.
+- **Configurable Timeouts:** Jobs can be assigned explicit execution timeouts (`--timeout <mins>`) that only begin counting once the target machine is booted and reachable via SSH.
+- **Stale Job Detection:** MAMA tracks active job process IDs and automatically flags and clears stale jobs if a worker process terminates unexpectedly.
+
+---
+
+## Directory Layout
+
+All operational assets, target root filesystems, and state databases reside under `/usr/share/mama`:
 
 ```text
 /usr/share/mama/
-├── mama.db                 # SQLite inventory & reservations (root:mama, 0664)
-├── mama.db-wal / -shm      # SQLite WAL and shared-memory index
-├── log/                    # Operational & VM console logs (root:mama, 2775)
+├── mama.db                 # SQLite inventory, job queues & boot history (root:mama, 0664)
+├── log/                    # Central and machine-specific execution logs (root:mama, 2775)
 │   ├── mama-log            # Central operational log
-│   └── <machine>-vmlog     # Serial console logs for VMs
+│   ├── <machine>           # Machine boot and command logs
+│   └── <machine>-vmlog     # Serial console output for VMs
 ├── machines/               # Target machine root filesystems (root:root, 0755)
-│   └── <name>/<arch>/<os>/ # Extracted Linux NFS rootfs (strict guest permissions!)
+│   └── <name>/<arch>/<os>/ # Extracted Linux NFS rootfs (preserves guest permissions)
 ├── os/                     # Master OS rootfs templates built by Kiwi-ng (root:root, 0755)
-├── os-descriptions/        # Kiwi XML appliance descriptions & config files
-├── jobs/                   # Automated job definitions (e.g. os-builder, igt, drm-tip)
-└── tftp/                   # dnsmasq TFTP root (autoexec.ipxe, iPXE binaries)
+├── os-descriptions/        # Kiwi XML appliance descriptions & configs
+├── jobs/                   # Automated job definitions (e.g. igt, os-builder)
+├── tftp/                   # dnsmasq TFTP root (autoexec.ipxe, firmware binaries)
+└── authorized_keys         # SSH public keys injected into booted machines
 ```
 
 ---
 
-## Permissions & Multi-User Access
+## Installation
 
-MAMA uses targeted **non-recursive** group permissions to allow normal developers to manage machines without compromising guest OS root filesystems:
-
-1. **Non-Root Machine Reservations**:
-   - The directory `/usr/share/mama` and `/usr/share/mama/log` are setgid `root:mama` (`mode 2775`).
-   - `mama.db*` files are owned by `root:mama` (`mode 0664`).
-   - Any member of the `mama` system group can run everyday management commands (`mama reserve`, `mama release`, `mama list`, `mama log`, `mama wait`) without `sudo`.
-
-2. **Guest Rootfs Integrity**:
-   - The `/usr/share/mama/machines/` and `/usr/share/mama/os/` trees remain strictly `root:root` with mode `0755`.
-   - Guest security files (`/etc/shadow`, `/etc/sudoers`), guest daemon UIDs/GIDs, and SUID binaries are never modified or compromised.
-
-3. **Remote Worker & Builder Support**:
-   - Remote machines (such as `os-builder` or test workers) mount `/usr/share/mama` over NFS.
-   - Because `mama.db`, scripts, and OS descriptions live on the shared NFS export, remote workers can access the shared environment seamlessly.
-
-4. **Sudo Awareness**:
-   - When running commands via `sudo`, MAMA inspects `$SUDO_USER` to attribute machine reservations to the real human user rather than `root`.
+For detailed step-by-step installation and configuration instructions on openSUSE Leap 16.0, please refer to [INSTALL.md](INSTALL.md).
 
 ---
 
-## Installation & Setup
+## License
 
-### Initial Installation
-
-Run the install script with root privileges:
-
-```bash
-sudo ./install.sh
-```
-
-The script will:
-1. Create the `mama` system group and automatically add your user (`$SUDO_USER`).
-2. Create standard directories in `/usr/share/mama`.
-3. Apply targeted, non-recursive permissions (`group mama`, `mode 2775/0664`).
-4. Install `mama-boot.service` into systemd.
-5. Symlink the CLI runner to `/usr/local/bin/mama` and `/usr/bin/mama`.
-
-> **Note**: If your user was just added to the `mama` group, log out and back in (or run `newgrp mama` in your active shell) for group membership to take effect.
-
-### Moving the Repository
-
-If you move the repository to a new path, simply rerun:
-
-```bash
-cd /new/path/to/mama-python
-sudo ./install.sh
-```
-
-The symlinks in `/usr/local/bin/mama` and `/usr/bin/mama` will be updated to point to the new location.
-
-### Development Workflow
-
-You do **not** need to rerun `install.sh` when modifying Python code. The CLI symlinks directly to `src/` in your repository, so any changes made to files in `src/mama/` take effect immediately.
-
-### Uninstallation
-
-To remove systemd services and CLI symlinks while keeping data intact:
-
-```bash
-sudo ./uninstall.sh
-```
-
----
-
-## Quick Command Reference
-
-```bash
-# List all machines and current state
-mama list
-
-# Reserve a machine (records your username)
-mama reserve <machine-name>
-
-# Release a reserved machine
-mama release <machine-name>
-
-# Wait for a machine to become idle
-mama wait <machine-name>
-
-# Connect to a machine via SSH
-mama connect <machine-name>
-
-# View or follow logs
-mama log <machine-name> -f
-
-# Start or stop a virtual machine
-mama start-vm <machine-name>
-mama stop <machine-name>
-
-# Start iPXE boot server
-mama serve
-```
+This project is licensed under the GNU General Public License v2.0 - see the [LICENSE](LICENSE) file for details.
