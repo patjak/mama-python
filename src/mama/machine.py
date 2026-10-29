@@ -434,6 +434,17 @@ class Machine:
                 return "offline"
             return "stopping"
 
+        if self.name and self.is_started:
+            row = MachineRepository.get_by_name(self.name)
+            if row:
+                if "is_started" in row and not to_bool(row["is_started"]):
+                    self.is_started = False
+                    self.state = "offline"
+                    return "offline"
+                db_state = row.get("state")
+                if db_state and self.is_booting() and (db_state in self.BOOT_STATES or db_state in ("failed", "boot-failed")):
+                    self.state = db_state
+
         ip = self.get_ip()
         if not ip:
             if self.is_booting():
@@ -501,12 +512,12 @@ class Machine:
                     self.error(f"timed out after {seconds_int}s", no_eol=False, timestamp=False)
                     return False
 
-                time.sleep(1)
                 spinner.update(
                     f"[bold yellow]({self.name}) State: [bold cyan]{curr_state}[/bold cyan] -> "
                     f"Waiting for: [bold green]{target_state}[/bold green] "
                     f"({int(time_passed)}s / {seconds_int}s)...[/bold yellow]"
                 )
+                time.sleep(1)
 
         time_passed_int = int(time.time() - start_time)
         self.debug(f"State '{target_state}' reached after {time_passed_int}s")

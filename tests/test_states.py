@@ -44,6 +44,39 @@ class TestMachineStates(unittest.TestCase):
         self.assertIn("nfs", Machine.format_state("nfs-mounted"))
         self.assertIn("boot-failed", Machine.format_state("boot-failed"))
 
+    def test_get_state_syncs_with_db_during_boot(self):
+        from unittest.mock import MagicMock, patch
+
+        mach = Machine(name="m1", is_started=True, state="dhcp", ip="192.168.1.50")
+        mach.get_ip = MagicMock(return_value="192.168.1.50")
+        mach.is_pingable = MagicMock(return_value=False)
+        mach.get_ssh_status = MagicMock(return_value="closed")
+        mach.is_nfs_mounted = MagicMock(return_value=False)
+
+        with patch("mama.machine.MachineRepository.get_by_name") as mock_get_by_name:
+            mock_get_by_name.return_value = {"name": "m1", "state": "kernel", "is_started": 1}
+            state = mach.get_state()
+            self.assertEqual(state, "kernel")
+            self.assertEqual(mach.state, "kernel")
+
+            # Check transition to booting
+            mock_get_by_name.return_value = {"name": "m1", "state": "booting", "is_started": 1}
+            state = mach.get_state()
+            self.assertEqual(state, "booting")
+            self.assertEqual(mach.state, "booting")
+
+    def test_get_state_detects_external_stop(self):
+        from unittest.mock import MagicMock, patch
+
+        mach = Machine(name="m1", is_started=True, state="booting", ip="192.168.1.50")
+        mach.get_ip = MagicMock(return_value="192.168.1.50")
+
+        with patch("mama.machine.MachineRepository.get_by_name") as mock_get_by_name:
+            mock_get_by_name.return_value = {"name": "m1", "state": "offline", "is_started": 0}
+            state = mach.get_state()
+            self.assertEqual(state, "offline")
+            self.assertFalse(mach.is_started)
+
 
 if __name__ == "__main__":
     unittest.main()
