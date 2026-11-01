@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shlex
 import subprocess
 import time
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -101,6 +102,34 @@ class Job:
 
         return job_content
 
+    def get_env(
+        self,
+        arch: str = "",
+        os_name: str = "",
+        worker: Any = None,
+        mach: Any = None,
+    ) -> Dict[str, str]:
+        """Build dictionary of standard MAMA environment variables."""
+        env: Dict[str, str] = {
+            "ARCH": str(arch or getattr(self, "arch", "")),
+            "OS": str(os_name or getattr(self, "os", "")),
+            "JOB": str(self.name),
+            "MAMA_HOST": str(getattr(config, "MAMA_HOST", "")),
+            "MAMA_PATH": str(getattr(config, "MAMA_PATH", "")),
+            "ARGS": str(self.args or ""),
+        }
+
+        if worker is not False and worker is not None:
+            env["WORKER"] = getattr(worker, "name", str(worker))
+        if mach is not False and mach is not None:
+            env["MACH"] = getattr(mach, "name", str(mach))
+
+        args_list = self.args.split() if self.args else []
+        for i, arg_val in enumerate(args_list, start=1):
+            env[f"ARG{i}"] = arg_val
+
+        return env
+
     def execute_prepare_job(self) -> bool:
         self.out(f"preparing job: {self.name} {self.arch} {self.os}")
         arch = self.arch
@@ -143,8 +172,9 @@ class Job:
                 worker_mach.set("os", Os(os_name, arch))
 
             job_content = self._preprocess(job_content, arch, os_name, worker, False)
+            env = self.get_env(arch, os_name, worker=worker_mach, mach=False)
 
-            ret = self.execute(job_content, mach=False, worker=worker_mach)
+            ret = self.execute(job_content, mach=False, worker=worker_mach, env=env)
             if not ret:
                 self.error("Prepare job FAILED")
             return ret
@@ -201,8 +231,9 @@ class Job:
                 mach.set("os", Os(os_name, arch))
 
             job_content = self._preprocess(job_content, arch, os_name, False, mach)
+            env = self.get_env(arch, os_name, worker=False, mach=mach)
 
-            ret = self.execute(job_content, mach=mach, worker=False)
+            ret = self.execute(job_content, mach=mach, worker=False, env=env)
             return ret
         except KeyboardInterrupt:
             self.error(f"\nRun job '{self.name}' interrupted by user (Ctrl+C). Cleaning up...")
@@ -249,9 +280,18 @@ class Job:
 
         return sections
 
-    def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
+    def execute(
+        self,
+        job_content: str,
+        mach: Any = False,
+        worker: Any = False,
+        env: Optional[Dict[str, str]] = None,
+    ) -> bool:
         no_retry = self.no_retry
         sections = self.parse_sections(job_content)
+
+        if env is None:
+            env = self.get_env(worker=worker, mach=mach)
 
         old_target: Any = None
 
@@ -293,14 +333,15 @@ class Job:
 
             # Execute section
             if context == "MAMA":
+                local_env = {**os.environ, **env}
                 for line in lines:
                     self.debug(f"(mama) {line}")
                     logfile = getattr(Log, "logfile", False)
                     if logfile:
                         with open(logfile, "a", encoding="utf-8") as lf:
-                            res = subprocess.run(line, shell=True, stdout=lf, stderr=subprocess.STDOUT)
+                            res = subprocess.run(line, shell=True, env=local_env, stdout=lf, stderr=subprocess.STDOUT)
                     else:
-                        res = subprocess.run(line, shell=True)
+                        res = subprocess.run(line, shell=True, env=local_env)
 
                     if res.returncode != 0:
                         self.error(f"EXECUTION FAILED: {line}")
@@ -312,7 +353,8 @@ class Job:
 
             elif context in ("DEVICE", "WORKER") and target_mach:
                 self.debug(f"({context}) Streaming {len(lines)} command(s) to {target_mach.name} via SSH subshell")
-                script_body = "\n".join(lines) + "\n"
+                exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items()) + "\n"
+                script_body = exports + "\n".join(lines) + "\n"
                 res_code = target_mach.ssh_script(
                     script=script_body,
                     no_timeout=self.no_ssh_timeout,

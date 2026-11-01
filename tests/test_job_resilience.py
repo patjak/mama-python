@@ -149,12 +149,54 @@ export RUN_ID="123"
         success = job.execute(script, mach=mach, worker=False)
 
         self.assertTrue(success)
-        # Verify ssh_script was called ONCE for the whole 3-line block
-        mach.ssh_script.assert_called_once_with(
-            script="cd /root/igt\nexport RUN_ID=\"123\"\n./test.sh\n",
-            no_timeout=False,
-            timeout_mins=None,
-        )
+        # Verify ssh_script was called ONCE for the whole block
+        mach.ssh_script.assert_called_once()
+        called_script = mach.ssh_script.call_args[1]["script"]
+        self.assertIn("cd /root/igt", called_script)
+        self.assertIn("export RUN_ID=\"123\"", called_script)
+        self.assertIn("./test.sh", called_script)
+        # Verify native exports are prepended
+        self.assertIn("export JOB=test-job", called_script)
+        self.assertIn("export MACH=box1", called_script)
+
+    def test_job_get_env(self):
+        mach = MagicMock(spec=Machine)
+        mach.name = "dut1"
+        worker = MagicMock(spec=Machine)
+        worker.name = "builder1"
+
+        job = Job("igt", args="--fast test1 test2")
+        env = job.get_env(arch="x86_64", os_name="leap-16.0", worker=worker, mach=mach)
+
+        self.assertEqual(env["ARCH"], "x86_64")
+        self.assertEqual(env["OS"], "leap-16.0")
+        self.assertEqual(env["JOB"], "igt")
+        self.assertEqual(env["MACH"], "dut1")
+        self.assertEqual(env["WORKER"], "builder1")
+        self.assertEqual(env["ARGS"], "--fast test1 test2")
+        self.assertEqual(env["ARG1"], "--fast")
+        self.assertEqual(env["ARG2"], "test1")
+        self.assertEqual(env["ARG3"], "test2")
+
+    @patch("mama.job.subprocess.run")
+    def test_execute_passes_native_env_to_mama_commands(self, mock_subproc):
+        mock_subproc.return_value = MagicMock(returncode=0)
+        mach = MagicMock(spec=Machine)
+        mach.name = "dut1"
+
+        script = """
+[MAMA]
+echo "Running locally"
+"""
+        job = Job("my-job", args="foo bar")
+        job.execute(script, mach=mach, worker=False)
+
+        mock_subproc.assert_called_once()
+        env_passed = mock_subproc.call_args[1].get("env", {})
+        self.assertEqual(env_passed.get("JOB"), "my-job")
+        self.assertEqual(env_passed.get("MACH"), "dut1")
+        self.assertEqual(env_passed.get("ARG1"), "foo")
+        self.assertEqual(env_passed.get("ARG2"), "bar")
 
     def test_machine_ssh_script_invokes_bash_es(self):
         mach = Machine(name="box1", ip="192.168.2.55", is_started=True, state="online")
