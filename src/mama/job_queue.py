@@ -2,30 +2,21 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
 from . import config
 from .logger import debug
+from .repository import MachineRepository
 
 
 class JobQueue:
     """Tracks waiting processes in SQLite queue table across concurrent executions."""
 
-    @staticmethod
-    def _get_db_path() -> str:
-        return getattr(
-            config,
-            "DB_FILE",
-            f"{getattr(config, 'MAMA_PATH', '/usr/share/mama')}/mama.db",
-        )
-
     @classmethod
     def _init_db(cls) -> None:
-        db_path = cls._get_db_path()
         try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
+            with MachineRepository.connection() as conn:
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS job_queue (
@@ -47,9 +38,8 @@ class JobQueue:
         if pid is None:
             pid = os.getpid()
         now = int(time.time())
-        db_path = cls._get_db_path()
         try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
+            with MachineRepository.connection() as conn:
                 conn.execute(
                     "INSERT INTO job_queue (machine_name, job, pid, queued_at) VALUES (?, ?, ?, ?)",
                     (machine_name, job_str, str(pid), now),
@@ -63,9 +53,8 @@ class JobQueue:
         cls._init_db()
         if pid is None:
             pid = os.getpid()
-        db_path = cls._get_db_path()
         try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
+            with MachineRepository.connection() as conn:
                 conn.execute(
                     "DELETE FROM job_queue WHERE machine_name = ? AND pid = ?",
                     (machine_name, str(pid)),
@@ -77,9 +66,8 @@ class JobQueue:
     @classmethod
     def clear_machine(cls, machine_name: str) -> None:
         cls._init_db()
-        db_path = cls._get_db_path()
         try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
+            with MachineRepository.connection() as conn:
                 if machine_name and machine_name != "all":
                     conn.execute("DELETE FROM job_queue WHERE machine_name = ?", (machine_name,))
                 else:
@@ -91,10 +79,8 @@ class JobQueue:
     @classmethod
     def get_queue(cls, machine_name: str = "") -> List[Dict[str, Any]]:
         cls._init_db()
-        db_path = cls._get_db_path()
         try:
-            with sqlite3.connect(db_path, timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+            with MachineRepository.connection() as conn:
                 query = "SELECT * FROM job_queue"
                 params: List[Any] = []
                 if machine_name:

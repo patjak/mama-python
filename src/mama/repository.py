@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime
 import pathlib
 import sqlite3
@@ -16,19 +17,26 @@ class MachineRepository:
         return pathlib.Path(db_path_str)
 
     @classmethod
-    def _get_connection(cls) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def connection(cls):
+        """Context manager providing an active SQLite connection and ensuring proper closure."""
         db_path = cls._get_db_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA busy_timeout=30000;")
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    _get_connection = connection
 
     @classmethod
     def init_db(cls) -> None:
         """Initialize tables, migrate columns if necessary, and ensure indexes exist."""
-        with cls._get_connection() as conn:
+        with cls.connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS machines (
                     name TEXT PRIMARY KEY,
@@ -54,6 +62,17 @@ class MachineRepository:
                 );
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_machines_mac ON machines(mac);")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    machine_name TEXT NOT NULL,
+                    job TEXT NOT NULL,
+                    pid TEXT NOT NULL,
+                    queued_at INTEGER NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_job_queue_machine ON job_queue(machine_name);")
 
             # Check if stop_timeout and started_at exist in machines table
             mach_cols = [col["name"] for col in conn.execute("PRAGMA table_info(machines);").fetchall()]
