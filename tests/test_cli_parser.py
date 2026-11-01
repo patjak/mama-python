@@ -50,6 +50,18 @@ class TestCliParser(unittest.TestCase):
         self.assertTrue(args.fast)
         self.assertTrue(args.verbose)
 
+    def test_parse_log_rotate(self):
+        args = self.parser.parse_args(["log", "box1", "--rotate"])
+        self.assertEqual(args.command, "log")
+        self.assertEqual(args.machine, "box1")
+        self.assertTrue(args.rotate)
+        self.assertEqual(args.keep, 10)
+
+        args_custom = self.parser.parse_args(["log", "--rotate", "--keep", "5"])
+        self.assertEqual(args_custom.command, "log")
+        self.assertTrue(args_custom.rotate)
+        self.assertEqual(args_custom.keep, 5)
+
     def test_parse_start_and_stop(self):
         args_start = self.parser.parse_args(["start", "box1"])
         self.assertEqual(args_start.command, "start")

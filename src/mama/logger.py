@@ -140,6 +140,74 @@ class Log:
             cls.logfile = False
             error(f"Failed to initialize file logger at {log_path}: {e}")
 
+    @classmethod
+    def rotate(cls, log_name_or_path: Union[str, pathlib.Path], keep: int = 10) -> bool:
+        """Rotate a log file sequentially (.1, .2, ..., .N) up to `keep` copies.
+
+        Shifts existing numbered backups, archives the active log to .1, and ensures
+        an empty new log file with group-writable permissions (mode 0664).
+        """
+        p = pathlib.Path(log_name_or_path)
+        if not p.is_absolute():
+            p = pathlib.Path(getattr(config, "MAMA_PATH", "/usr/share/mama")) / "log" / str(log_name_or_path)
+
+        if not p.parent.exists():
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+
+        # If currently logging to this file, flush and temporarily close handler
+        is_active_handler = (cls.logfile == str(p))
+        if is_active_handler and cls._file_handler:
+            cls._file_handler.flush()
+            cls._file_handler.close()
+            logger.removeHandler(cls._file_handler)
+            cls._file_handler = None
+
+        try:
+            # Shift existing backups: .keep -> deleted, .9 -> .10, .8 -> .9, etc.
+            for i in range(keep, 0, -1):
+                src = p.with_name(f"{p.name}.{i}")
+                dst = p.with_name(f"{p.name}.{i + 1}")
+                if i >= keep:
+                    if src.exists():
+                        src.unlink()
+                else:
+                    if src.exists():
+                        src.rename(dst)
+
+            # Move active log to .1 if it exists and has content
+            if p.exists():
+                p.rename(p.with_name(f"{p.name}.1"))
+
+            # Create fresh new empty log file with appropriate permissions
+            p.touch(mode=0o664, exist_ok=True)
+            try:
+                cur_mode = p.stat().st_mode
+                os.chmod(str(p), cur_mode | 0o020 | 0o040 | 0o004)
+            except OSError:
+                pass
+
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                try:
+                    import grp
+                    mama_gid = grp.getgrnam("mama").gr_gid
+                    os.chown(str(p), -1, mama_gid)
+                except Exception:
+                    pass
+
+            # Re-initialize file handler if it was previously active
+            if is_active_handler:
+                cls.set_file(p.name)
+
+            return True
+        except Exception as e:
+            error(f"Failed to rotate log {p}: {e}")
+            if is_active_handler:
+                cls.set_file(p.name)
+            return False
+
 
 def out(msg: str, no_eol: bool = False, timestamp: bool = True) -> int:
     global _last_no_eol

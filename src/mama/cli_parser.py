@@ -154,11 +154,13 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_queue_mach = p_queue.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_queue_mach.completer = machine_completer
 
-    p_log = subparsers.add_parser("log", parents=[parent_parser], help="View, follow, or clear logs", formatter_class=HELP_FORMATTER)
+    p_log = subparsers.add_parser("log", parents=[parent_parser], help="View, follow, rotate, or clear logs", formatter_class=HELP_FORMATTER)
     p_log_mach = p_log.add_argument("machine", nargs="?", default=False, help="Target machine (defaults to mama-log)")
     p_log_mach.completer = machine_completer
     p_log.add_argument("-f", "--follow", action="store_true", help="Follow log in real time (tail -f)")
     p_log.add_argument("--vm", action="store_true", help="Inspect VM serial console log")
+    p_log.add_argument("--rotate", action="store_true", help="Rotate current log file before starting a new operation")
+    p_log.add_argument("--keep", type=int, default=10, help="Number of rotated backup copies to retain (default: 10)")
     p_log.add_argument("--clear", action="store_true", help="Clear the log file(s)")
 
     p_hist = subparsers.add_parser("history", parents=[parent_parser], help="Show start/stop timing history and logs", formatter_class=HELP_FORMATTER)

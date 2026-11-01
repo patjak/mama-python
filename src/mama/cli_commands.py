@@ -736,12 +736,20 @@ def cmd_log(
     vm: bool = False,
     follow: bool = False,
     clear: bool = False,
+    rotate: bool = False,
+    keep: int = 10,
 ) -> None:
     if vm:
         mach = select_machine(arg)
         if not isinstance(mach, Machine):
             return
         log_file = mach.get_vmlog_path()
+
+        if rotate:
+            if Log.rotate(log_file, keep=keep):
+                out(f"Rotated VM log for '{mach.name}' (keeping up to {keep} backups)")
+            return
+
         if clear:
             if log_file.exists():
                 log_file.unlink()
@@ -755,11 +763,26 @@ def cmd_log(
             return
 
         cmd = ["tail", "-f", str(log_file)] if follow else ["cat", str(log_file)]
-        subprocess.run(cmd)
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            pass
     else:
         arg_name = str(arg) if isinstance(arg, str) and arg else "mama-log"
         log_dir = pathlib.Path(config.MAMA_PATH) / "log"
         log_file = log_dir / arg_name
+
+        if rotate:
+            vmlog_file = log_dir / f"{arg_name}-vmlog"
+            rotated = False
+            if Log.rotate(log_file, keep=keep):
+                rotated = True
+            if vmlog_file.exists():
+                Log.rotate(vmlog_file, keep=keep)
+            if rotated:
+                out(f"Rotated log for '{arg_name}' (keeping up to {keep} backups)")
+            return
+
         if clear:
             vmlog_file = log_dir / f"{arg_name}-vmlog"
             cleared = False
@@ -780,7 +803,10 @@ def cmd_log(
             return
 
         cmd = ["tail", "-f", str(log_file)] if follow else ["cat", str(log_file)]
-        subprocess.run(cmd)
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            pass
 
 
 def cmd_start(arg: Union[str, bool]) -> None:

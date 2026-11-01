@@ -82,6 +82,8 @@ def main() -> None:
             vm=args.vm,
             follow=args.follow,
             clear=args.clear,
+            rotate=getattr(args, "rotate", False),
+            keep=getattr(args, "keep", 10),
         )
 
     elif args.command == "history":
