@@ -107,6 +107,30 @@ def kill_vm(machine_name: str) -> bool:
     return True
 
 
+def get_default_vm_ram_mb() -> int:
+    """Calculate default RAM (in MB) for virtual machines.
+
+    If VM_DEFAULT_RAM_MB is 'auto', detects total host physical memory and
+    subtracts VM_HOST_RAM_RESERVE_MB (default 4096 MB) for host processes,
+    with a minimum allocation floor of 2048 MB.
+    """
+    configured = getattr(config, "VM_DEFAULT_RAM_MB", "auto")
+    if isinstance(configured, int) and configured > 0:
+        return configured
+    if isinstance(configured, str) and configured.strip().isdigit():
+        return int(configured.strip())
+
+    try:
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        phys_pages = os.sysconf("SC_PHYS_PAGES")
+        host_ram_mb = (page_size * phys_pages) // (1024 * 1024)
+    except (ValueError, OSError, AttributeError):
+        host_ram_mb = 8192
+
+    reserve_mb = getattr(config, "VM_HOST_RAM_RESERVE_MB", 4096)
+    return max(2048, host_ram_mb - reserve_mb)
+
+
 def build_qemu_cmd(mach: Machine, pid_path: pathlib.Path, vmlog_path: pathlib.Path) -> list[str]:
     """Assemble modern QEMU command arguments for virtual machine launch."""
     num_cores = os.cpu_count() or 1
@@ -139,9 +163,9 @@ def build_qemu_cmd(mach: Machine, pid_path: pathlib.Path, vmlog_path: pathlib.Pa
         cpus = configured_cpus if configured_cpus else num_cores
         qemu_cmd.extend(["-smp", str(cpus)])
 
-    # RAM Memory configuration: use user setting if provided, else config default (4096 MB)
+    # RAM Memory configuration: use user setting if provided, else dynamic host RAM minus reserve
     if not any(arg in ("-m", "--m") for arg in user_vm_params):
-        ram_mb = getattr(config, "VM_DEFAULT_RAM_MB", 4096)
+        ram_mb = get_default_vm_ram_mb()
         qemu_cmd.extend(["-m", str(ram_mb)])
 
     qemu_cmd.extend([

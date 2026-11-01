@@ -7,7 +7,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
 from mama import config
 from mama.machine import Machine
-from mama.vm_mgr import build_qemu_cmd
+from mama.vm_mgr import build_qemu_cmd, get_default_vm_ram_mb
 
 
 class TestVmMgr(unittest.TestCase):
@@ -22,13 +22,61 @@ class TestVmMgr(unittest.TestCase):
         self.pid_path = pathlib.Path("/tmp/test.pid")
         self.vmlog_path = pathlib.Path("/tmp/test.vmlog")
 
+        self.orig_ram = config.VM_DEFAULT_RAM_MB
+        self.orig_reserve = config.VM_HOST_RAM_RESERVE_MB
+
+    def tearDown(self):
+        config.VM_DEFAULT_RAM_MB = self.orig_ram
+        config.VM_HOST_RAM_RESERVE_MB = self.orig_reserve
+
+    def test_get_default_vm_ram_mb_auto(self):
+        config.VM_DEFAULT_RAM_MB = "auto"
+        config.VM_HOST_RAM_RESERVE_MB = 4096
+
+        # Simulate a host with 64 GB (65536 MB) of RAM
+        with patch("os.sysconf") as mock_sysconf:
+            def fake_sysconf(name):
+                if name == "SC_PAGE_SIZE":
+                    return 4096
+                if name == "SC_PHYS_PAGES":
+                    return 65536 * 1024 * 1024 // 4096
+                return 0
+            mock_sysconf.side_effect = fake_sysconf
+
+            ram = get_default_vm_ram_mb()
+            # 65536 - 4096 = 61440 MB
+            self.assertEqual(ram, 61440)
+
+    def test_get_default_vm_ram_mb_floor(self):
+        config.VM_DEFAULT_RAM_MB = "auto"
+        config.VM_HOST_RAM_RESERVE_MB = 4096
+
+        # Simulate a small host with only 4 GB (4096 MB) of RAM
+        with patch("os.sysconf") as mock_sysconf:
+            def fake_sysconf(name):
+                if name == "SC_PAGE_SIZE":
+                    return 4096
+                if name == "SC_PHYS_PAGES":
+                    return 4096 * 1024 * 1024 // 4096
+                return 0
+            mock_sysconf.side_effect = fake_sysconf
+
+            ram = get_default_vm_ram_mb()
+            # 4096 - 4096 = 0 -> clamped to minimum floor 2048 MB
+            self.assertEqual(ram, 2048)
+
+    def test_get_default_vm_ram_mb_explicit(self):
+        config.VM_DEFAULT_RAM_MB = 8192
+        self.assertEqual(get_default_vm_ram_mb(), 8192)
+
     def test_build_qemu_cmd_defaults(self):
+        config.VM_DEFAULT_RAM_MB = 4096
         cmd = build_qemu_cmd(self.mach, self.pid_path, self.vmlog_path)
 
         # Check binary name
         self.assertIn("qemu-system-x86_64", cmd[0] if "sudo" not in cmd[0] else cmd[1])
 
-        # Check default memory is 4096 MB (not legacy 44 GB)
+        # Check configured memory
         m_idx = cmd.index("-m")
         self.assertEqual(cmd[m_idx + 1], "4096")
 

@@ -68,6 +68,19 @@ debug = false
         self.assertEqual(config.VM_DEFAULT_RAM_MB, 2048)
         self.assertFalse(config.DEBUG)
 
+    def test_load_config_vm_ram_auto(self):
+        self.conf_file.write_text(
+            """
+[mama]
+vm_default_ram_mb = auto
+""",
+            encoding="utf-8",
+        )
+
+        config.load_config(conf_path=str(self.conf_file))
+
+        self.assertEqual(config.VM_DEFAULT_RAM_MB, "auto")
+
     def test_env_var_override_takes_precedence(self):
         self.conf_file.write_text(
             """

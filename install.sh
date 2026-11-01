@@ -58,8 +58,9 @@ nfs_enabled = true
 nfs_service_name = nfs-server
 nfs_exports_path = /etc/exports.d/mama.exports
 
-# Virtual Machine Defaults
-vm_default_ram_mb = 4096
+# Virtual Machine Defaults (auto: host RAM minus reserve)
+vm_default_ram_mb = auto
+vm_host_ram_reserve_mb = 4096
 # vm_default_cpus = 4
 EOF
     chmod 0644 /etc/mama/mama.conf

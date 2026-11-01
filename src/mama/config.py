@@ -3,7 +3,7 @@ from __future__ import annotations
 import configparser
 import os
 import pathlib
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 # Core Paths
 MAMA_PATH: str = "/usr/share/mama"
@@ -41,7 +41,8 @@ DEBUG_LOCK: bool = False
 DEBUG_PID: bool = False
 
 # Virtual Machine Defaults
-VM_DEFAULT_RAM_MB: int = 4096
+VM_DEFAULT_RAM_MB: Union[int, str] = "auto"
+VM_HOST_RAM_RESERVE_MB: int = 4096
 VM_DEFAULT_CPUS: Optional[int] = None
 
 # Machine Management Delays and Timeouts (in seconds, unless noted)
@@ -65,7 +66,7 @@ def load_config(conf_path: Optional[str] = None) -> None:
     global DHCP_ENABLED, DHCP_INTERFACE, DHCP_RANGE_START, DHCP_RANGE_END
     global DHCP_NETMASK, DHCP_LEASE_TIME, DNSMASQ_CONF_PATH, DNSMASQ_LEASES_FILE
     global NFS_ENABLED, NFS_SERVICE_NAME, NFS_EXPORTS_PATH, NFS_OPTIONS
-    global DEBUG, DEBUG_LOCK, DEBUG_PID, VM_DEFAULT_RAM_MB, VM_DEFAULT_CPUS
+    global DEBUG, DEBUG_LOCK, DEBUG_PID, VM_DEFAULT_RAM_MB, VM_HOST_RAM_RESERVE_MB, VM_DEFAULT_CPUS
     global START_TIMEOUT_DEFAULT, STOP_TIMEOUT, SSH_CMD_TIMEOUT, POWER_CYCLE_DELAY, RESOURCE_WAIT_TIMEOUT
 
     target_conf = conf_path or os.environ.get("MAMA_CONF") or CONF_FILE
@@ -135,7 +136,20 @@ def load_config(conf_path: Optional[str] = None) -> None:
     DEBUG_PID = get_val("DEBUG_PID", DEBUG_PID, bool)
 
     # VM Defaults
-    VM_DEFAULT_RAM_MB = get_val("VM_DEFAULT_RAM_MB", VM_DEFAULT_RAM_MB, int)
+    raw_ram = os.environ.get("VM_DEFAULT_RAM_MB")
+    if raw_ram is None:
+        raw_ram = data.get("VM_DEFAULT_RAM_MB")
+    if raw_ram is not None:
+        raw_ram_str = str(raw_ram).strip().lower()
+        if raw_ram_str in ("auto", "dynamic", "max"):
+            VM_DEFAULT_RAM_MB = "auto"
+        else:
+            try:
+                VM_DEFAULT_RAM_MB = int(raw_ram_str)
+            except ValueError:
+                VM_DEFAULT_RAM_MB = "auto"
+
+    VM_HOST_RAM_RESERVE_MB = get_val("VM_HOST_RAM_RESERVE_MB", VM_HOST_RAM_RESERVE_MB, int)
     raw_cpus = os.environ.get("VM_DEFAULT_CPUS") or data.get("VM_DEFAULT_CPUS")
     if raw_cpus:
         try:
