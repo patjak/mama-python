@@ -1091,6 +1091,7 @@ class Machine:
         no_timeout: bool = False,
         timeout_mins: Optional[int] = None,
         allocate_pty: bool = False,
+        stdin_data: Optional[str] = None,
     ) -> Union[int, bool]:
         if self.get_ssh_status() != "open":
             if not self.wait_for_state("online", 30, dont_print=True):
@@ -1115,7 +1116,25 @@ class Machine:
         }
         if allocate_pty:
             kwargs["allocate_pty"] = True
+        if stdin_data is not None:
+            kwargs["stdin_data"] = stdin_data
         return net_mgr.run_ssh_cmd(**kwargs)
+
+    def ssh_script(
+        self,
+        script: str,
+        no_timeout: bool = False,
+        timeout_mins: Optional[int] = None,
+        allocate_pty: bool = False,
+    ) -> Union[int, bool]:
+        """Execute a multi-line shell script in a single remote subshell via SSH."""
+        return self.ssh_cmd(
+            cmd="bash -es",
+            no_timeout=no_timeout,
+            timeout_mins=timeout_mins,
+            allocate_pty=allocate_pty,
+            stdin_data=script,
+        )
 
     def reserve(self, user: str, force: bool = False) -> tuple[bool, str]:
         if user:

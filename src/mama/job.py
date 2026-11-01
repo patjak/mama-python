@@ -4,7 +4,7 @@ import os
 import pathlib
 import subprocess
 import time
-from typing import Any, Union
+from typing import Any, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -219,108 +219,115 @@ class Job:
             except Exception:
                 pass
 
-    def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
-        no_retry = self.no_retry
+    @staticmethod
+    def parse_sections(job_content: str) -> List[Tuple[str, List[str]]]:
+        """Parse raw job script content into structured (context, [lines]) blocks."""
+        sections: List[Tuple[str, List[str]]] = []
+        current_context = "MAMA"
+        current_lines: List[str] = []
 
-        ssh_ret = 0
-        error_flag = False
-        context = ""
-        lines = job_content.splitlines()
-
-        for line in lines:
-            line = line.strip()
+        for raw_line in job_content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
 
             if line.startswith("["):
                 parts = line.split("[", 1)
                 if len(parts) > 1:
-                    context_inner = parts[1].split("]", 1)[0].strip()
-                    old_context = context
+                    ctx = parts[1].split("]", 1)[0].strip()
+                    if ctx in ("MAMA", "DEVICE", "WORKER"):
+                        if current_lines:
+                            sections.append((current_context, current_lines))
+                            current_lines = []
+                        current_context = ctx
+                        continue
 
-                    if context_inner in ("MAMA", "DEVICE", "WORKER"):
-                        context = context_inner
+            current_lines.append(line)
 
-                    self.debug(f"Switching to context: {context}")
+        if current_lines:
+            sections.append((current_context, current_lines))
 
-                    if old_context != context:
-                        if old_context == "DEVICE" and mach:
-                            if not mach.stop():
-                                return False
+        return sections
 
-                        if old_context == "WORKER" and worker:
-                            if not worker.stop():
-                                return False
+    def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
+        no_retry = self.no_retry
+        sections = self.parse_sections(job_content)
 
-                        m = None
-                        if context == "DEVICE":
-                            m = mach
-                        elif context == "WORKER":
-                            m = worker
+        old_target: Any = None
 
-                        if (context in ("DEVICE", "WORKER")) and m:
-                            m.load()
-
-                            if not m.stop():
-                                return False
-
-                            if m.only_vm:
-                                if not m.start_vm():
-                                    return False
-                            else:
-                                num_retries = 1 if no_retry else 3
-                                start_success = False
-
-                                for i in range(num_retries):
-                                    if m.start():
-                                        start_success = True
-                                        break
-                                    m.debug(f"Retrying to start machine: {i + 1}")
-                                    time.sleep(2)
-
-                                if not start_success:
-                                    m.error("Failed to start machine")
-                                    return False
+        for context, lines in sections:
+            if not lines:
                 continue
 
-            if line.startswith("#") or not line:
-                continue
+            target_mach = mach if context == "DEVICE" else (worker if context == "WORKER" else None)
 
+            # If transitioning away from an active target machine to MAMA, stop it
+            if old_target and old_target != target_mach:
+                self.debug(f"Stopping previous machine '{old_target.name}' before context switch to {context}")
+                old_target.stop()
+                old_target = None
+
+            # If entering a machine context (DEVICE or WORKER), ensure it is started
+            if target_mach:
+                target_mach.load()
+                if not target_mach.is_started:
+                    self.debug(f"Starting {target_mach.name} for {context} execution")
+                    if target_mach.only_vm:
+                        if not target_mach.start_vm():
+                            return False
+                    else:
+                        num_retries = 1 if no_retry else 3
+                        start_success = False
+                        for i in range(num_retries):
+                            if target_mach.start():
+                                start_success = True
+                                break
+                            target_mach.debug(f"Retrying to start machine: {i + 1}")
+                            time.sleep(2)
+
+                        if not start_success:
+                            target_mach.error(f"Failed to start machine '{target_mach.name}'")
+                            return False
+
+                old_target = target_mach
+
+            # Execute section
             if context == "MAMA":
-                self.debug(f"(mama) {line}")
-                logfile = getattr(Log, "logfile", False)
-                if logfile:
-                    with open(logfile, "a", encoding="utf-8") as lf:
-                        res = subprocess.run(line, shell=True, stdout=lf, stderr=subprocess.STDOUT)
-                else:
-                    res = subprocess.run(line, shell=True)
+                for line in lines:
+                    self.debug(f"(mama) {line}")
+                    logfile = getattr(Log, "logfile", False)
+                    if logfile:
+                        with open(logfile, "a", encoding="utf-8") as lf:
+                            res = subprocess.run(line, shell=True, stdout=lf, stderr=subprocess.STDOUT)
+                    else:
+                        res = subprocess.run(line, shell=True)
 
-                if res.returncode != 0:
-                    self.error(f"EXECUTION FAILED: {line}")
-                    error_flag = True
-                    break
+                    if res.returncode != 0:
+                        self.error(f"EXECUTION FAILED: {line}")
+                        if mach:
+                            mach.stop()
+                        if worker:
+                            worker.stop()
+                        return False
 
-            line = line.replace("$RET", str(ssh_ret))
-
-            mach_for_log = None
-            res_code = 0
-
-            if context == "DEVICE" and mach:
-                res_code = mach.ssh_cmd(line, no_timeout=self.no_ssh_timeout, timeout_mins=self.timeout)
-                mach_for_log = mach
-            elif context == "WORKER" and worker:
-                res_code = worker.ssh_cmd(line, no_timeout=self.no_ssh_timeout, timeout_mins=self.timeout)
-                mach_for_log = worker
-
-            if context in ("DEVICE", "WORKER"):
-                ssh_ret = res_code if isinstance(res_code, int) else 1
-
+            elif context in ("DEVICE", "WORKER") and target_mach:
+                self.debug(f"({context}) Streaming {len(lines)} command(s) to {target_mach.name} via SSH subshell")
+                script_body = "\n".join(lines) + "\n"
+                res_code = target_mach.ssh_script(
+                    script=script_body,
+                    no_timeout=self.no_ssh_timeout,
+                    timeout_mins=self.timeout,
+                )
                 if res_code != 0:
-                    if mach_for_log:
-                        if res_code == 124:
-                            mach_for_log.error(f"EXECUTION TIMEOUT: {line}")
-                        else:
-                            mach_for_log.error(f"EXECUTION FAILED: {line}")
-                    error_flag = True
-                    break
+                    if res_code == 124:
+                        target_mach.error(f"EXECUTION TIMEOUT in {context} script block")
+                    else:
+                        target_mach.error(f"EXECUTION FAILED in {context} script block (exit code {res_code})")
+                    if mach:
+                        mach.stop()
+                    if worker:
+                        worker.stop()
+                    return False
 
         self.out("Job finished")
 
@@ -329,7 +336,7 @@ class Job:
         if worker:
             worker.stop()
 
-        return not error_flag
+        return True
 
     def out(self, msg: str, no_eol: bool = False, timestamp: bool = True) -> None:
         mach = select_machine(self.mach) if self.mach else False

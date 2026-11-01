@@ -145,6 +145,7 @@ def run_ssh_cmd(
     no_timeout: bool = False,
     logfile: Union[str, bool] = False,
     allocate_pty: bool = False,
+    stdin_data: Optional[str] = None,
 ) -> int:
     """Execute command on remote machine via SSH."""
     pty_flag = "-t" if allocate_pty else "-T"
@@ -162,10 +163,17 @@ def run_ssh_cmd(
     if not no_timeout:
         ssh_args = ["timeout", "--foreground", f"{timeout_mins}m"] + ssh_args
 
+    input_bytes = stdin_data.encode("utf-8") if stdin_data is not None else None
+
     if logfile:
         with open(logfile, "a", encoding="utf-8") as lf:
-            res = subprocess.run(ssh_args, stdout=lf, stderr=subprocess.STDOUT)
+            res = subprocess.run(
+                ssh_args,
+                input=input_bytes,
+                stdout=lf,
+                stderr=subprocess.STDOUT,
+            )
     else:
-        res = subprocess.run(ssh_args)
+        res = subprocess.run(ssh_args, input=input_bytes)
 
     return res.returncode

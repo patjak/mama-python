@@ -104,6 +104,77 @@ class TestJobResilience(unittest.TestCase):
         # Verify mach.stop() was called in finally
         mach.stop.assert_called_once()
 
+    def test_parse_sections(self):
+        script = """
+# Top-level comment
+[MAMA]
+echo "setup 1"
+echo "setup 2"
+
+[DEVICE]
+cd /root/test
+export FOO="bar"
+./run.py
+
+[MAMA]
+echo "cleanup"
+"""
+        sections = Job.parse_sections(script)
+        self.assertEqual(len(sections), 3)
+
+        self.assertEqual(sections[0][0], "MAMA")
+        self.assertEqual(sections[0][1], ['echo "setup 1"', 'echo "setup 2"'])
+
+        self.assertEqual(sections[1][0], "DEVICE")
+        self.assertEqual(sections[1][1], ['cd /root/test', 'export FOO="bar"', './run.py'])
+
+        self.assertEqual(sections[2][0], "MAMA")
+        self.assertEqual(sections[2][1], ['echo "cleanup"'])
+
+    def test_execute_streams_device_section_in_single_ssh_call(self):
+        script = """
+[DEVICE]
+cd /root/igt
+export RUN_ID="123"
+./test.sh
+"""
+        mach = MagicMock(spec=Machine)
+        mach.name = "box1"
+        mach.is_started = True
+        mach.ssh_script = MagicMock(return_value=0)
+        mach.stop = MagicMock(return_value=True)
+        mach.load = MagicMock()
+
+        job = Job("test-job")
+        success = job.execute(script, mach=mach, worker=False)
+
+        self.assertTrue(success)
+        # Verify ssh_script was called ONCE for the whole 3-line block
+        mach.ssh_script.assert_called_once_with(
+            script="cd /root/igt\nexport RUN_ID=\"123\"\n./test.sh\n",
+            no_timeout=False,
+            timeout_mins=None,
+        )
+
+    def test_machine_ssh_script_invokes_bash_es(self):
+        mach = Machine(name="box1", ip="192.168.2.55", is_started=True, state="online")
+        mach.get_ssh_status = MagicMock(return_value="open")
+        mach.get_ip = MagicMock(return_value="192.168.2.55")
+
+        with patch("mama.net_mgr.run_ssh_cmd") as mock_run_ssh:
+            mock_run_ssh.return_value = 0
+            ret = mach.ssh_script("echo line1\necho line2\n", timeout_mins=20)
+            self.assertEqual(ret, 0)
+
+            mock_run_ssh.assert_called_once_with(
+                ip="192.168.2.55",
+                cmd="bash -es",
+                timeout_mins=20,
+                no_timeout=False,
+                logfile=False,
+                stdin_data="echo line1\necho line2\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
