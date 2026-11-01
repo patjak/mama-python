@@ -939,7 +939,7 @@ class Machine:
         t_stop_start = time.time()
 
         if ssh_was_open:
-            shutdown_cmd = "halt" if (self.startcmd or self.stopcmd) else "poweroff"
+            shutdown_cmd = "halt" if self.stopcmd else "poweroff"
             self.ssh_cmd(shutdown_cmd)
 
             halted = self.wait_for_state("offline", effective_timeout)
