@@ -125,6 +125,31 @@ def setup_cli_parser() -> argparse.ArgumentParser:
         help="Show verbose output including IP and MAC addresses",
     )
 
+    p_monitor = subparsers.add_parser(
+        "monitor",
+        parents=[parent_parser],
+        help="Live terminal dashboard monitoring machine states and jobs",
+        formatter_class=HELP_FORMATTER,
+    )
+    p_monitor.add_argument(
+        "-i",
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Refresh interval in seconds (default: 2.0)",
+    )
+    p_monitor.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast mode: use cached database state without network power polling",
+    )
+    p_monitor.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Show verbose output including IP and MAC addresses",
+    )
+
     p_queue = subparsers.add_parser("queue", parents=[parent_parser], help="View queued waiting jobs", formatter_class=HELP_FORMATTER)
     p_queue_mach = p_queue.add_argument("machine", nargs="?", default=False, help="Target machine (optional)")
     p_queue_mach.completer = machine_completer

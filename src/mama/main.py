@@ -66,6 +66,13 @@ def main() -> None:
             verbose=getattr(args, "verbose", False),
         )
 
+    elif args.command == "monitor":
+        cli_commands.cmd_monitor(
+            interval=args.interval,
+            fast=args.fast,
+            verbose=args.verbose,
+        )
+
     elif args.command == "queue":
         cli_commands.cmd_queue(arg=args.machine)
 

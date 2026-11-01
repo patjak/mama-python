@@ -176,9 +176,19 @@ def cmd_list(
         except Exception as e:
             debug(f"Failed to sync DHCP leases: {e}")
 
+    table = generate_machines_table(fast=fast, verbose=verbose, title="Configured Machines")
     console = Console()
+    console.print(table)
+
+
+def generate_machines_table(
+    fast: bool = False,
+    verbose: bool = False,
+    title: str = "Configured Machines",
+) -> Table:
+    """Construct a Rich Table displaying current machine statuses, power, and active jobs."""
     table = Table(
-        title="Configured Machines",
+        title=title,
         header_style="bold cyan",
         border_style="bright_blue",
         title_style="bold white",
@@ -285,7 +295,29 @@ def cmd_list(
         ])
         table.add_row(*row)
 
-    console.print(table)
+    return table
+
+
+def cmd_monitor(interval: float = 2.0, fast: bool = False, verbose: bool = False) -> None:
+    """Run an interactive real-time live terminal dashboard."""
+    import datetime
+    from rich.live import Live
+
+    console = Console()
+
+    def make_display() -> Table:
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"MAMA Monitor | {now_str} | Host: {config.MAMA_HOST} | Refresh: {interval}s (Ctrl+C to exit)"
+        return generate_machines_table(fast=fast, verbose=verbose, title=title)
+
+    try:
+        refresh_rate = max(1, min(10, int(1.0 / interval))) if interval < 1.0 else 4
+        with Live(make_display(), console=console, refresh_per_second=refresh_rate, screen=False) as live:
+            while True:
+                time.sleep(interval)
+                live.update(make_display())
+    except KeyboardInterrupt:
+        console.print("\n[dim]Monitor stopped.[/dim]")
 
 
 def cmd_queue(arg: Union[str, bool, None] = False) -> None:

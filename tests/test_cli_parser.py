@@ -36,6 +36,20 @@ class TestCliParser(unittest.TestCase):
         self.assertTrue(args.verbose)
         self.assertTrue(args.fast)
 
+    def test_parse_monitor_defaults(self):
+        args = self.parser.parse_args(["monitor"])
+        self.assertEqual(args.command, "monitor")
+        self.assertEqual(args.interval, 2.0)
+        self.assertFalse(args.fast)
+        self.assertFalse(args.verbose)
+
+    def test_parse_monitor_options(self):
+        args = self.parser.parse_args(["monitor", "-i", "5.5", "--fast", "-v"])
+        self.assertEqual(args.command, "monitor")
+        self.assertEqual(args.interval, 5.5)
+        self.assertTrue(args.fast)
+        self.assertTrue(args.verbose)
+
     def test_parse_start_and_stop(self):
         args_start = self.parser.parse_args(["start", "box1"])
         self.assertEqual(args_start.command, "start")
@@ -74,6 +88,18 @@ class TestCliParser(unittest.TestCase):
         args = self.parser.parse_args(["dhcp", "sync"])
         self.assertEqual(args.command, "dhcp")
         self.assertEqual(args.dhcp_action, "sync")
+
+    def test_generate_machines_table(self):
+        from unittest.mock import patch
+        from mama.cli_commands import generate_machines_table
+        from mama.machine import Machine
+
+        dummy_mach = Machine(name="m1", ip="192.168.2.10", mac="00:11:22:33:44:55", is_started=True)
+        with patch("mama.cli_commands.Machine.get_all", return_value=[dummy_mach]):
+            with patch("mama.cli_commands.JobQueue.get_queue_counts", return_value={"m1": 0}):
+                table = generate_machines_table(fast=True, verbose=True, title="Test Table")
+                self.assertEqual(table.title, "Test Table")
+                self.assertEqual(len(table.rows), 1)
 
 
 if __name__ == "__main__":
