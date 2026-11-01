@@ -477,23 +477,6 @@ class MachineRepository:
             return [dict(r) for r in rows]
 
 
-# Module-level locking functions expected by job.py, machine.py, etc.
-def LOCK() -> None:
-    pass
-
-
-def UNLOCK() -> None:
-    pass
-
-
-def IS_LOCKED() -> bool:
-    return True
-
-
-def SLEEP_ON_LOCK(seconds: int) -> None:
-    time.sleep(seconds)
-
-
 def select_machine(*args: Any, **kwargs: Any) -> Any:
     """Lazy wrapper to import select_machine from cli_commands at call time."""
     from .cli_commands import select_machine as _select_machine

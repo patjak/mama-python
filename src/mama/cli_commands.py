@@ -381,14 +381,19 @@ def cmd_new() -> None:
     )
 
     path = pathlib.Path(config.MAMA_PATH) / "machines" / name
+    locks_path = pathlib.Path(config.MAMA_PATH) / "locks"
     if Util.is_root():
         path.mkdir(parents=True, exist_ok=True)
-        (path / "lock").touch(mode=0o666, exist_ok=True)
-        (path / "lock").chmod(0o666)
+        locks_path.mkdir(parents=True, exist_ok=True)
+        (locks_path / f"{name}.lock").touch(mode=0o664, exist_ok=True)
+        try:
+            (locks_path / f"{name}.lock").chmod(0o664)
+        except OSError:
+            pass
     else:
         subprocess.run(["sudo", "mkdir", "-p", str(path)])
-        subprocess.run(["sudo", "touch", str(path / "lock")])
-        subprocess.run(["sudo", "chmod", "666", str(path / "lock")])
+        locks_path.mkdir(parents=True, exist_ok=True)
+        (locks_path / f"{name}.lock").touch(mode=0o664, exist_ok=True)
 
     MachineRepository.add_machine(m)
     out("New machine created")
