@@ -91,8 +91,32 @@ class TestVmMgr(unittest.TestCase):
         # Ensure legacy -net nic and -net bridge are NOT present
         self.assertNotIn("-net", cmd)
 
+    @patch("mama.vm_mgr.Os.is_runnable", return_value=False)
+    def test_start_vm_fails_if_os_not_installed(self, mock_runnable):
+        from mama.vm_mgr import start_vm
+        mach = Machine(name="vm-1", os="x86_64/missing-os", kernel="6.4")
+        mach.error = MagicMock()
+        res = start_vm(mach)
+        self.assertFalse(res)
+        mach.error.assert_called_once()
+        self.assertIn("not installed", mach.error.call_args[0][0])
+
+    @patch("mama.vm_mgr.Os.is_runnable", return_value=True)
+    def test_start_vm_fails_if_kernel_file_missing(self, mock_runnable):
+        from mama.vm_mgr import start_vm
+        mach = Machine(name="vm-1", os="x86_64/test-os", kernel="6.4")
+        mach.error = MagicMock()
+        mach.get_kernel_path = MagicMock(return_value="/nonexistent/boot")
+        mach.get_kernels = MagicMock(return_value={})
+        res = start_vm(mach)
+        self.assertFalse(res)
+        mach.error.assert_called_once()
+        self.assertIn("does not exist", mach.error.call_args[0][0])
+
+    @patch("mama.vm_mgr.Os.is_runnable", return_value=True)
+    @patch("pathlib.Path.is_file", return_value=True)
     @patch("mama.vm_mgr.is_in_kvm_group", return_value=False)
-    def test_start_vm_warns_when_not_in_kvm_group(self, mock_kvm):
+    def test_start_vm_warns_when_not_in_kvm_group(self, mock_kvm, mock_isfile, mock_runnable):
         from mama.vm_mgr import start_vm
         mach = Machine(name="vm-1", os="x86_64/test", kernel="6.4")
         mach.error = MagicMock()

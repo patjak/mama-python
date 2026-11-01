@@ -10,6 +10,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from . import config
+from .os_mgr import Os
 from .repository import MachineRepository
 from .util import Util
 
@@ -220,9 +221,48 @@ def start_vm(mach: Machine) -> bool:
         mach.error("No OS has been configured!")
         return False
 
+    parts = mach.os.split("/")
+    arch = parts[0]
+    os_name = parts[1] if len(parts) > 1 else ""
+
+    if not Os.is_runnable(arch, os_name, mach) and os_name != "NONE":
+        mach.error(
+            f"OS '{mach.os}' is not installed for machine '{mach.name}'!\n"
+            f"Path does not exist: {pathlib.Path(config.MAMA_PATH) / 'machines' / mach.name / mach.os}\n"
+            f"Install it with: mama install-os {mach.name} {arch} {os_name} "
+            f"(or copy from another machine: mama copy-os <src> {arch} {os_name} {mach.name})"
+        )
+        return False
+
     if not mach.kernel and not mach.os.endswith("/NONE"):
         mach.error("No kernel set for machine")
         return False
+
+    if not mach.os.endswith("/NONE"):
+        kernel_path = pathlib.Path(mach.get_kernel_path())
+        if arch == "aarch64":
+            kernel_filename = f"Image-{mach.kernel}"
+        elif arch == "ppc64le":
+            kernel_filename = f"vmlinux-{mach.kernel}"
+        else:
+            kernel_filename = f"vmlinuz-{mach.kernel}"
+        initrd_filename = f"initrd-{mach.kernel}"
+
+        kernel_file = kernel_path / kernel_filename
+        if not kernel_file.is_file():
+            available_kernels = list(mach.get_kernels().keys())
+            avail_str = ", ".join(available_kernels) if available_kernels else "none found"
+            mach.error(
+                f"Kernel file '{kernel_file}' does not exist!\n"
+                f"Available kernels for this OS: {avail_str}\n"
+                f"Set a valid kernel with: mama set {mach.name} kernel <version>"
+            )
+            return False
+
+        initrd_file = kernel_path / initrd_filename
+        if not initrd_file.is_file():
+            mach.error(f"Initrd file '{initrd_file}' does not exist!")
+            return False
 
     if get_vm_pid(mach.name) is not None:
         mach.error("Failed to start VM. Already running.")
