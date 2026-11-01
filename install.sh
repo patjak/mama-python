@@ -32,6 +32,39 @@ fi
 echo "Setting up directory structure in /usr/share/mama..."
 mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
 
+# Configuration Directory and Default mama.conf Setup
+echo "Setting up configuration in /etc/mama..."
+mkdir -p /etc/mama
+if [ ! -f /etc/mama/mama.conf ]; then
+    echo "Creating default /etc/mama/mama.conf..."
+    cat <<'EOF' > /etc/mama/mama.conf
+# MAMA Central Configuration File
+[mama]
+# Server IP address and TFTP root
+mama_host = 192.168.2.1
+mama_path = /usr/share/mama
+db_file = /usr/share/mama/mama.db
+
+# DHCP Configuration
+dhcp_enabled = true
+dhcp_interface = br0
+dhcp_range_start = 192.168.2.100
+dhcp_range_end = 192.168.2.200
+dhcp_netmask = 255.255.255.0
+dhcp_lease_time = 12h
+
+# NFS Configuration
+nfs_enabled = true
+nfs_service_name = nfs-server
+nfs_exports_path = /etc/exports.d/mama.exports
+
+# Virtual Machine Defaults
+vm_default_ram_mb = 4096
+# vm_default_cpus = 4
+EOF
+    chmod 0644 /etc/mama/mama.conf
+fi
+
 # 3. Targeted Non-Recursive Permissions
 # Allow group 'mama' to manage SQLite and logs, while preserving rootfs files in machines/ and os/
 echo "Applying non-recursive permissions on /usr/share/mama..."

@@ -200,9 +200,12 @@ sudo ./install.sh
 The installer will:
 1. Create the `mama` system group.
 2. Add the invoking user (`$SUDO_USER`) to the `mama` group.
-3. Configure non-recursive permissions (`chmod 2775 /usr/share/mama /usr/share/mama/log`).
-4. Install and enable the `mama-boot.service` systemd unit.
-5. Create symlinks for `/usr/bin/mama` and `/usr/local/bin/mama`.
+3. Set up directory structures and configuration template (`/etc/mama/mama.conf`).
+4. Configure non-recursive permissions (`chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks`).
+5. Install and enable the `mama-boot.service` systemd unit.
+6. Create symlinks for `/usr/bin/mama` and `/usr/local/bin/mama`.
+
+> **Configuration**: Custom host IPs, DHCP ranges, or VM defaults can be configured in `/etc/mama/mama.conf`. Environment variables (e.g. `MAMA_HOST`, `MAMA_CONF`) can also be used to override settings.
 
 > **Important**: If your user account was just added to the `mama` group, activate the new group in your current shell:
 > ```bash
