@@ -45,6 +45,7 @@ class MachineRepository:
                     arch TEXT DEFAULT '',
                     os TEXT DEFAULT '',
                     kernel TEXT DEFAULT '',
+                    state TEXT DEFAULT '',
                     reservation TEXT DEFAULT '',
                     resources TEXT DEFAULT '',
                     boot_params TEXT DEFAULT '',
@@ -74,8 +75,10 @@ class MachineRepository:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_queue_machine ON job_queue(machine_name);")
 
-            # Check if stop_timeout and started_at exist in machines table
+            # Check if state, stop_timeout and started_at exist in machines table
             mach_cols = [col["name"] for col in conn.execute("PRAGMA table_info(machines);").fetchall()]
+            if "state" not in mach_cols:
+                conn.execute("ALTER TABLE machines ADD COLUMN state TEXT DEFAULT '';")
             if "stop_timeout" not in mach_cols:
                 conn.execute("ALTER TABLE machines ADD COLUMN stop_timeout INTEGER DEFAULT 30;")
             if "started_at" not in mach_cols:
@@ -247,7 +250,7 @@ class MachineRepository:
     def upsert_machine(cls, m_dict: Dict[str, Any]) -> None:
         """Full upsert for adding or completely updating a machine."""
         columns = [
-            "name", "mac", "ip", "arch", "os", "kernel",
+            "name", "mac", "ip", "arch", "os", "kernel", "state",
             "reservation", "resources", "boot_params", "vm_params",
             "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
             "start_timeout", "stop_timeout", "_is_started", "started_at"
@@ -282,7 +285,7 @@ class MachineRepository:
             m_dict = machine
         else:
             attrs = [
-                "name", "mac", "ip", "arch", "os", "kernel",
+                "name", "mac", "ip", "arch", "os", "kernel", "state",
                 "reservation", "resources", "boot_params", "vm_params",
                 "only_vm", "job", "job_pid", "startcmd", "stopcmd", "powercmd",
                 "start_timeout", "stop_timeout", "started_at"

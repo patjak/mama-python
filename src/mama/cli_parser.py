@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-from typing import Any, List
+from typing import Any, List, Optional
 
 try:
     from rich_argparse import RichHelpFormatter
