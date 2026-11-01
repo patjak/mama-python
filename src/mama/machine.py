@@ -68,6 +68,8 @@ class Machine:
     )
 
     SETTABLE_FIELDS: ClassVar[Dict[str, Tuple[str, str, str]]] = {
+        "ip": ("IP address", "Enter new IP address:", "ip"),
+        "mac": ("MAC address", "Enter new MAC address:", "mac"),
         "resources": ("resources", "Enter new resources (space separated):", "resources"),
         "params": ("boot parameters", "Enter new boot parameters:", "boot_params"),
         "vmparams": ("VM parameters", "Enter new VM parameters:", "vm_params"),
@@ -788,6 +790,19 @@ class Machine:
                 self.only_vm = new_bool
                 MachineRepository.update_fields(self.name, {"only_vm": 1 if new_bool else 0})
                 self.out(f"Setting only_vm to: {'yes' if new_bool else 'no'}")
+            elif field_name == "mac":
+                new_val = str(val).strip()
+                if new_val and not Util.is_valid_mac(new_val):
+                    self.error(f"Invalid MAC address format: {new_val}")
+                    return
+                self.mac = new_val
+                MachineRepository.update_fields(self.name, {"mac": new_val})
+                self.out(f"Setting MAC address to: {new_val}")
+            elif field_name == "ip":
+                new_val = str(val).strip()
+                self.ip = new_val
+                MachineRepository.update_fields(self.name, {"ip": new_val})
+                self.out(f"Setting IP address to: {new_val if new_val else '(none)'}")
             else:
                 new_val = str(val)
                 setattr(self, field_name, new_val)

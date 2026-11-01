@@ -412,26 +412,33 @@ def cmd_new() -> None:
         only_vm=only_vm,
     )
 
-    path = pathlib.Path(config.MAMA_PATH) / "machines" / name
     locks_path = pathlib.Path(config.MAMA_PATH) / "locks"
-    if Util.is_root():
-        path.mkdir(parents=True, exist_ok=True)
+    try:
         locks_path.mkdir(parents=True, exist_ok=True)
-        (locks_path / f"{name}.lock").touch(mode=0o664, exist_ok=True)
+        lock_file = locks_path / f"{name}.lock"
+        lock_file.touch(mode=0o664, exist_ok=True)
         try:
-            (locks_path / f"{name}.lock").chmod(0o664)
+            lock_file.chmod(0o664)
         except OSError:
             pass
-    else:
-        subprocess.run(["sudo", "mkdir", "-p", str(path)])
-        locks_path.mkdir(parents=True, exist_ok=True)
-        (locks_path / f"{name}.lock").touch(mode=0o664, exist_ok=True)
+    except OSError:
+        pass
+
+    path = pathlib.Path(config.MAMA_PATH) / "machines" / name
+    if Util.is_root():
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
     MachineRepository.add_machine(m)
-    out("New machine created")
+    out(f"Machine '{name}' created in inventory.")
 
     if getattr(config, "DHCP_ENABLED", True):
-        DnsmasqManager.reload_or_restart()
+        if Util.is_root():
+            DnsmasqManager.reload_or_restart()
+        else:
+            out("Note: Run 'sudo mama dhcp sync' to update dnsmasq configuration and leases.")
 
 
 def cmd_list_os(m: Union[str, bool, None] = False) -> None:
@@ -963,7 +970,10 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
     mach.set(attr, val)
 
     if attr in ("ip", "mac") and getattr(config, "DHCP_ENABLED", True):
-        DnsmasqManager.reload_or_restart()
+        if Util.is_root():
+            DnsmasqManager.reload_or_restart()
+        else:
+            out(f"Note: Updated {attr} in database. Run 'sudo mama dhcp sync' to update dnsmasq.")
 
 
 def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None) -> None:

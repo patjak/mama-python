@@ -107,7 +107,7 @@ def kill_vm(machine_name: str) -> bool:
     try:
         pid_file.unlink(missing_ok=True)
     except OSError:
-        subprocess.run(["sudo", "rm", "-f", str(pid_file)])
+        pass
 
     return True
 
