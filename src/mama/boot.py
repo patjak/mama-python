@@ -65,10 +65,10 @@ class iPXEHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 sys.stderr.write(f"[boot.py] Error updating state for static file transfer: {e}\n")
 
-            self._send_file(target_file)
+            transferred = self._send_file(target_file)
 
             # Transition state to 'booting' once kernel / initrd file transfer finishes
-            if fname.startswith(("initrd", "vmlinuz", "Image", "vmlinux")):
+            if transferred and fname.startswith(("initrd", "vmlinuz", "Image", "vmlinux")):
                 try:
                     if mach_name:
                         Machine.set_state_by_name(mach_name, "booting")
@@ -124,7 +124,7 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
         self._send_response(200, response)
 
-    def _send_file(self, file_path: pathlib.Path) -> None:
+    def _send_file(self, file_path: pathlib.Path) -> bool:
         try:
             file_size = file_path.stat().st_size
             self.send_response(200)
@@ -134,16 +134,29 @@ class iPXEHandler(BaseHTTPRequestHandler):
 
             with open(file_path, "rb") as f:
                 shutil.copyfileobj(f, self.wfile)
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            sys.stderr.write(f"[boot.py] Client {self.address_string()} disconnected during {file_path.name}\n")
+            return False
         except Exception as e:
-            self.send_error(500, f"Error reading file: {e}")
+            try:
+                self.send_error(500, f"Error reading file: {e}")
+            except Exception:
+                pass
+            return False
 
     def _send_response(self, status_code: int, body: str) -> None:
-        encoded = body.encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        try:
+            encoded = body.encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:
+            sys.stderr.write(f"[boot.py] Error sending response: {e}\n")
 
     def log_message(self, format: str, *args: object) -> None:
         sys.stderr.write(f"[boot.py] {self.address_string()} - {format % args}\n")

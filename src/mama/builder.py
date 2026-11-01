@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 import subprocess
@@ -12,6 +13,40 @@ from .logger import error, fatal, out
 from .machine import Machine
 from .os_mgr import Arch, Os
 from .util import Util
+
+
+@contextlib.contextmanager
+def chroot_mounts(root_dir: pathlib.Path):
+    """Safely mount procfs and sysfs inside a chroot rootfs and guarantee unmounting on block exit."""
+    sudo_prefix = [] if Util.is_root() else ["sudo"]
+    proc_dir = root_dir / "proc"
+    sys_dir = root_dir / "sys"
+    proc_dir.mkdir(parents=True, exist_ok=True)
+    sys_dir.mkdir(parents=True, exist_ok=True)
+
+    mounted: list[pathlib.Path] = []
+    try:
+        res = subprocess.run(sudo_prefix + ["mount", "-t", "proc", "/proc", str(proc_dir)])
+        if res.returncode != 0:
+            error(f"Failed to mount procfs to {proc_dir}")
+            return
+        mounted.append(proc_dir)
+
+        res = subprocess.run(sudo_prefix + ["mount", "-t", "sysfs", "sysfs", str(sys_dir)])
+        if res.returncode != 0:
+            error(f"Failed to mount sysfs to {sys_dir}")
+            return
+        mounted.append(sys_dir)
+
+        yield
+    finally:
+        for m in reversed(mounted):
+            try:
+                res = subprocess.run(sudo_prefix + ["umount", str(m)])
+                if res.returncode != 0:
+                    error(f"Failed to umount {m}")
+            except Exception:
+                pass
 
 
 def build_os(
@@ -115,50 +150,28 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
             return
 
         with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
-            res = subprocess.run(sudo_prefix + ["mount", "-t", "proc", "/proc", str(tmp_dir / "proc")])
-            if res.returncode != 0:
-                error(f"Failed to mount procfs to {tmp_dir / 'proc'}")
+            pass
+
+        with chroot_mounts(tmp_dir):
+            config_files = list((tmp_dir / "boot").glob("config-*"))
+            if not config_files:
+                error("Failed to find /boot/config-*")
                 subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
 
-            res = subprocess.run(sudo_prefix + ["mount", "-t", "sysfs", "sysfs", str(tmp_dir / "sys")])
+            kver = config_files[0].name.split("config-", 1)[1]
+
+            with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
+                res = subprocess.run(sudo_prefix + ["chroot", str(tmp_dir), "dracut", "-f", "--kver", kver])
+
             if res.returncode != 0:
-                error(f"Failed to mount sysfs to {tmp_dir / 'sys'}")
-                subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
+                error("Failed to run dracut -f inside chroot")
                 subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
-
-        config_files = list((tmp_dir / "boot").glob("config-*"))
-        if not config_files:
-            error("Failed to find /boot/config-*")
-            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
-            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
-            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
-            return
-
-        kver = config_files[0].name.split("config-", 1)[1]
-
-        with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
-            res = subprocess.run(sudo_prefix + ["chroot", str(tmp_dir), "dracut", "-f", "--kver", kver])
-
-        if res.returncode != 0:
-            error("Failed to run dracut -f inside chroot")
-            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
-            subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
-            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
-            return
-
-        res = subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "sys")])
-        if res.returncode != 0:
-            fatal(f"Failed to umount {tmp_dir / 'sys'}")
-
-        res = subprocess.run(sudo_prefix + ["umount", str(tmp_dir / "proc")])
-        if res.returncode != 0:
-            fatal(f"Failed to umount {tmp_dir / 'proc'}")
 
         res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
         if res.returncode != 0:
-            fatal("Failed to remove old version of os: {target}")
+            fatal(f"Failed to remove old version of os: {target}")
 
         res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(pathlib.Path(config.MAMA_PATH) / "os" / arch)])
         if res.returncode != 0:
