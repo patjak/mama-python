@@ -7,6 +7,7 @@ import fcntl
 import os
 import pathlib
 import subprocess
+import tempfile
 import time
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
 
@@ -22,6 +23,8 @@ from .logger import Log, debug, error, fatal, out
 from .os_mgr import Os
 from .repository import MachineRepository
 from .util import Util
+
+_HELD_MACHINE_LOCKS: Dict[str, int] = {}
 
 
 def to_bool(val: Any) -> bool:
@@ -202,28 +205,56 @@ class Machine:
         return vm_mgr.kill_vm(self.name)
 
     def start_vm(self) -> bool:
-        return vm_mgr.start_vm(self)
+        with self.lock():
+            return vm_mgr.start_vm(self)
 
     @contextlib.contextmanager
     def lock(self):
-        lock_file = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / "lock"
+        global _HELD_MACHINE_LOCKS
+        if _HELD_MACHINE_LOCKS.get(self.name, 0) > 0:
+            _HELD_MACHINE_LOCKS[self.name] += 1
+            try:
+                yield
+            finally:
+                _HELD_MACHINE_LOCKS[self.name] -= 1
+            return
+
+        lock_dir = pathlib.Path(config.MAMA_PATH) / "locks"
         try:
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(str(lock_dir), 0o2775)
+            except OSError:
+                pass
+        except OSError:
+            lock_dir = pathlib.Path(tempfile.gettempdir()) / "mama-locks"
+            lock_dir.mkdir(parents=True, exist_ok=True)
+
+        lock_file = lock_dir / f"{self.name}.lock"
+        try:
             if not lock_file.exists():
-                lock_file.touch(mode=0o666, exist_ok=True)
-        except Exception:
+                lock_file.touch(mode=0o664, exist_ok=True)
+                try:
+                    os.chmod(str(lock_file), 0o664)
+                except OSError:
+                    pass
+        except OSError:
             pass
 
         if getattr(config, "DEBUG_LOCK", False):
-            self.debug(f"Acquiring machine lock (PID {os.getpid()})")
+            self.debug(f"Acquiring machine lock for {self.name} (PID {os.getpid()})")
 
         with open(lock_file, "a+") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            _HELD_MACHINE_LOCKS[self.name] = 1
+            if getattr(config, "DEBUG_LOCK", False):
+                self.debug(f"Acquired machine lock for {self.name} (PID {os.getpid()})")
             try:
                 yield
             finally:
                 if getattr(config, "DEBUG_LOCK", False):
-                    self.debug(f"Releasing machine lock (PID {os.getpid()})")
+                    self.debug(f"Releasing machine lock for {self.name} (PID {os.getpid()})")
+                _HELD_MACHINE_LOCKS[self.name] = 0
                 try:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 except Exception:
@@ -850,121 +881,123 @@ class Machine:
         return True
 
     def start(self) -> bool:
-        curr_state = self.get_state()
-        if curr_state == "online":
-            self.error("Machine is already started")
-            return False
+        with self.lock():
+            curr_state = self.get_state()
+            if curr_state == "online":
+                self.error("Machine is already started")
+                return False
 
-        if not self.os:
-            self.error("No OS has been configured!")
-            return False
+            if not self.os:
+                self.error("No OS has been configured!")
+                return False
 
-        parts = self.os.split("/")
-        arch = parts[0]
-        os_name = parts[1] if len(parts) > 1 else ""
+            parts = self.os.split("/")
+            arch = parts[0]
+            os_name = parts[1] if len(parts) > 1 else ""
 
-        if not Os.is_runnable(arch, os_name, self) and os_name != "NONE":
-            self.error(f"OS is not runnable: {self.os}")
-            return False
+            if not Os.is_runnable(arch, os_name, self) and os_name != "NONE":
+                self.error(f"OS is not runnable: {self.os}")
+                return False
 
-        if not self.kernel and os_name != "NONE":
-            self.error("No kernel set for machine")
-            return False
+            if not self.kernel and os_name != "NONE":
+                self.error("No kernel set for machine")
+                return False
 
-        if curr_state in ("unresp", "unreach", "unresponsive", "unreachable"):
-            self.set_state("cycling")
-            self.stop()
-            self.debug(f"Waiting for power cycle delay: {self.power_cycle_delay}")
-            time.sleep(self.power_cycle_delay)
-            return self.start()
+            if curr_state in ("unresp", "unreach", "unresponsive", "unreachable"):
+                self.set_state("cycling")
+                self.stop()
+                self.debug(f"Waiting for power cycle delay: {self.power_cycle_delay}")
+                time.sleep(self.power_cycle_delay)
+                return self.start()
 
-        if self.only_vm:
-            return self.start_vm()
+            if self.only_vm:
+                return self.start_vm()
 
-        if not self.wait_for_resources():
-            return False
+            if not self.wait_for_resources():
+                return False
 
-        now = int(time.time())
-        self.is_started = True
-        self.started_at = now
-        MachineRepository.update_fields(self.name, {"_is_started": 1, "started_at": now})
+            now = int(time.time())
+            self.is_started = True
+            self.started_at = now
+            MachineRepository.update_fields(self.name, {"_is_started": 1, "started_at": now})
 
-        if curr_state == "offline":
-            self.set_state("power-on")
-            if self.startcmd:
-                startcmd = self._preprocess_cmd(self.startcmd)
-                self.debug(f"Start command: {startcmd}")
-                subprocess.run(startcmd, shell=True)
-        else:
-            self.set_state("booting")
+            if curr_state == "offline":
+                self.set_state("power-on")
+                if self.startcmd:
+                    startcmd = self._preprocess_cmd(self.startcmd)
+                    self.debug(f"Start command: {startcmd}")
+                    subprocess.run(startcmd, shell=True)
+            else:
+                self.set_state("booting")
 
-        effective_timeout = MachineRepository.get_calculated_start_timeout(
-            self.name, self.os, "bm", default_timeout=self.start_timeout
-        )
-        self.debug(f"Using bare-metal boot timeout: {effective_timeout}s for OS {self.os}")
-
-        t_start = time.time()
-        ret = self.wait_for_state("online", effective_timeout)
-
-        if ret:
-            self.set_state("online")
-            elapsed = int(time.time() - t_start)
-            MachineRepository.record_start_time(self.name, self.os, "bm", elapsed, start_time=int(t_start))
-            new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "bm")
-            self.set("start-timeout", new_timeout)
-            self.debug(
-                f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
+            effective_timeout = MachineRepository.get_calculated_start_timeout(
+                self.name, self.os, "bm", default_timeout=self.start_timeout
             )
-        else:
-            self.set_state("failed")
-            self.stop()
+            self.debug(f"Using bare-metal boot timeout: {effective_timeout}s for OS {self.os}")
 
-        return ret
+            t_start = time.time()
+            ret = self.wait_for_state("online", effective_timeout)
 
-    def stop(self, force: bool = False) -> bool:
-        if not self.is_started and not force:
-            self.clear()
-            return True
-
-        self.out("Stopping machine")
-
-        boot_type = "vm" if self.is_vm() else "bm"
-        effective_timeout = MachineRepository.get_calculated_stop_timeout(
-            self.name, self.os, boot_type, default_timeout=self.stop_timeout
-        )
-        self.debug(f"Using {boot_type.upper()} stop timeout: {effective_timeout}s for OS {self.os}")
-
-        ssh_was_open = (self.get_ssh_status() == "open")
-        self.set_state("stopping")
-        t_stop_start = time.time()
-
-        if ssh_was_open:
-            shutdown_cmd = "halt" if self.stopcmd else "poweroff"
-            self.ssh_cmd(shutdown_cmd)
-
-            halted = self.wait_for_state("offline", effective_timeout)
-            if halted:
-                elapsed = int(time.time() - t_stop_start)
-                MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed, stop_time=int(time.time()))
-                new_timeout = MachineRepository.get_calculated_stop_timeout(self.name, self.os, boot_type)
-                self.set("stop-timeout", new_timeout)
+            if ret:
+                self.set_state("online")
+                elapsed = int(time.time() - t_start)
+                MachineRepository.record_start_time(self.name, self.os, "bm", elapsed, start_time=int(t_start))
+                new_timeout = MachineRepository.get_calculated_start_timeout(self.name, self.os, "bm")
+                self.set("start-timeout", new_timeout)
                 self.debug(
-                    f"{boot_type.upper()} stop finished in {elapsed}s. Updated stop timeout for {self.os} to {new_timeout}s."
+                    f"Bare-metal boot finished in {elapsed}s. Updated start timeout for {self.os} to {new_timeout}s."
                 )
             else:
-                self.error(f"Graceful shutdown timed out after {effective_timeout}s. Forcing power off.")
+                self.set_state("failed")
+                self.stop()
 
-        if self.stopcmd:
-            stopcmd = self._preprocess_cmd(self.stopcmd)
-            self.debug(f"Stop command: {stopcmd}")
-            subprocess.run(stopcmd, shell=True)
+            return ret
 
-        if self.is_vm():
-            self.debug("Killing VM")
-            self.kill_vm()
+    def stop(self, force: bool = False) -> bool:
+        with self.lock():
+            if not self.is_started and not force:
+                self.clear()
+                return True
 
-        self.clear()
-        return True
+            self.out("Stopping machine")
+
+            boot_type = "vm" if self.is_vm() else "bm"
+            effective_timeout = MachineRepository.get_calculated_stop_timeout(
+                self.name, self.os, boot_type, default_timeout=self.stop_timeout
+            )
+            self.debug(f"Using {boot_type.upper()} stop timeout: {effective_timeout}s for OS {self.os}")
+
+            ssh_was_open = (self.get_ssh_status() == "open")
+            self.set_state("stopping")
+            t_stop_start = time.time()
+
+            if ssh_was_open:
+                shutdown_cmd = "halt" if self.stopcmd else "poweroff"
+                self.ssh_cmd(shutdown_cmd)
+
+                halted = self.wait_for_state("offline", effective_timeout)
+                if halted:
+                    elapsed = int(time.time() - t_stop_start)
+                    MachineRepository.record_stop_time(self.name, self.os, boot_type, elapsed, stop_time=int(time.time()))
+                    new_timeout = MachineRepository.get_calculated_stop_timeout(self.name, self.os, boot_type)
+                    self.set("stop-timeout", new_timeout)
+                    self.debug(
+                        f"{boot_type.upper()} stop finished in {elapsed}s. Updated stop timeout for {self.os} to {new_timeout}s."
+                    )
+                else:
+                    self.error(f"Graceful shutdown timed out after {effective_timeout}s. Forcing power off.")
+
+            if self.stopcmd:
+                stopcmd = self._preprocess_cmd(self.stopcmd)
+                self.debug(f"Stop command: {stopcmd}")
+                subprocess.run(stopcmd, shell=True)
+
+            if self.is_vm():
+                self.debug("Killing VM")
+                self.kill_vm()
+
+            self.clear()
+            return True
 
     def is_ancestor(self, ancestor_pid: Union[int, str], pid: Optional[Union[int, str]] = None) -> bool:
         if pid is None:

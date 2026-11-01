@@ -30,13 +30,13 @@ fi
 
 # 2. Directory Layout Setup in /usr/share/mama
 echo "Setting up directory structure in /usr/share/mama..."
-mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log}
+mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
 
 # 3. Targeted Non-Recursive Permissions
 # Allow group 'mama' to manage SQLite and logs, while preserving rootfs files in machines/ and os/
 echo "Applying non-recursive permissions on /usr/share/mama..."
-chgrp mama /usr/share/mama /usr/share/mama/log
-chmod 2775 /usr/share/mama /usr/share/mama/log
+chgrp mama /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
+chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
 
 # Ensure existing database files and logs are readable and writable by group 'mama'
 if compgen -G "/usr/share/mama/mama.db*" >/dev/null; then
