@@ -25,23 +25,27 @@ def get_vmlog_path(machine_name: str) -> pathlib.Path:
 
 def get_vmpid_path(machine_name: str) -> pathlib.Path:
     """Return path to this machine's VM pidfile."""
-    run_mama = pathlib.Path("/run/mama") / f"{machine_name}.pid"
-    fallback = pathlib.Path(config.MAMA_PATH) / "run" / f"{machine_name}.pid"
+    log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+    pid_file = log_dir / f"{machine_name}-vmpid"
 
-    if run_mama.exists():
-        return run_mama
-    if fallback.exists():
-        return fallback
+    # Backward compatibility: check legacy /run/mama/<machine>.pid
+    legacy_pid = pathlib.Path("/run/mama") / f"{machine_name}.pid"
+    if legacy_pid.exists() and not pid_file.exists():
+        return legacy_pid
 
+    return pid_file
+
+
+def is_in_kvm_group() -> bool:
+    """Check if current process user is in the 'kvm' system group."""
     try:
-        pathlib.Path("/run/mama").mkdir(parents=True, exist_ok=True)
-        return run_mama
-    except OSError:
-        try:
-            (pathlib.Path(config.MAMA_PATH) / "run").mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        return fallback
+        if os.geteuid() == 0:
+            return True
+        import grp
+        kvm_gid = grp.getgrnam("kvm").gr_gid
+        return kvm_gid in os.getgroups()
+    except Exception:
+        return True
 
 
 def get_vm_pid(machine_name: str) -> Optional[int]:
@@ -150,10 +154,7 @@ def build_qemu_cmd(mach: Machine, pid_path: pathlib.Path, vmlog_path: pathlib.Pa
 
     arch = "x86_64" if os_arch == "i686" else os_arch
 
-    qemu_cmd: list[str] = []
-    if not Util.is_root():
-        qemu_cmd.append("sudo")
-    qemu_cmd.append(f"qemu-system-{arch}")
+    qemu_cmd: list[str] = [f"qemu-system-{arch}"]
 
     user_vm_params = shlex.split(mach.vm_params) if mach.vm_params else []
 
@@ -215,9 +216,6 @@ def build_qemu_cmd(mach: Machine, pid_path: pathlib.Path, vmlog_path: pathlib.Pa
 
 def start_vm(mach: Machine) -> bool:
     """Launch virtual instance of machine using QEMU."""
-    if not Util.is_root():
-        mach.out("You must be root to start a VM")
-
     if not mach.os:
         mach.error("No OS has been configured!")
         return False
@@ -230,17 +228,24 @@ def start_vm(mach: Machine) -> bool:
         mach.error("Failed to start VM. Already running.")
         return False
 
+    if not is_in_kvm_group():
+        mach.error(
+            "Current user is not a member of the 'kvm' system group!\n"
+            "QEMU network bridge helper requires kvm group membership.\n"
+            "Please run: sudo usermod -aG kvm $USER (then reload groups with 'newgrp kvm')."
+        )
+        return False
+
     vmlog_path = get_vmlog_path(mach.name)
     pid_path = get_vmpid_path(mach.name)
 
     try:
         vmlog_path.parent.mkdir(parents=True, exist_ok=True)
-        if Util.is_root():
-            vmlog_path.touch(mode=0o666, exist_ok=True)
-            vmlog_path.chmod(0o666)
-        else:
-            subprocess.run(["sudo", "touch", str(vmlog_path)])
-            subprocess.run(["sudo", "chmod", "666", str(vmlog_path)])
+        vmlog_path.touch(mode=0o664, exist_ok=True)
+        try:
+            vmlog_path.chmod(0o664)
+        except OSError:
+            pass
         with open(vmlog_path, "w") as f:
             pass
     except Exception as e:

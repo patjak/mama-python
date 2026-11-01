@@ -199,19 +199,21 @@ sudo ./install.sh
 
 The installer will:
 1. Create the `mama` system group.
-2. Add the invoking user (`$SUDO_USER`) to the `mama` group.
-3. Set up directory structures and configuration template (`/etc/mama/mama.conf`).
-4. Configure non-recursive permissions (`chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks`).
-5. Install and enable the `mama-boot.service` systemd unit.
-6. Create symlinks for `/usr/bin/mama` and `/usr/local/bin/mama`.
+2. Add the invoking user (`$SUDO_USER`) to the `mama` and `kvm` groups.
+3. Configure QEMU bridge helper permissions (`/etc/qemu/bridge.conf`).
+4. Set up directory structures and configuration template (`/etc/mama/mama.conf`).
+5. Configure non-recursive permissions (`chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks`).
+6. Install and enable the `mama-boot.service` systemd unit.
+7. Create symlinks for `/usr/bin/mama` and `/usr/local/bin/mama`.
 
 > **Configuration**: Custom host IPs, DHCP ranges, or VM defaults can be configured in `/etc/mama/mama.conf`. Environment variables (e.g. `MAMA_HOST`, `MAMA_CONF`) can also be used to override settings.
 
-> **Important**: If your user account was just added to the `mama` group, activate the new group in your current shell:
+> **Important**: If your user account was just added to the `mama` and `kvm` groups, activate the new groups in your current shell:
 > ```bash
 > newgrp mama
+> newgrp kvm
 > ```
-> (or log out and back in).
+> (or log out and back in). Members of `mama` and `kvm` can start, monitor, and stop virtual and bare-metal machines without `sudo`.
 
 ---
 

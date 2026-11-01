@@ -22,15 +22,23 @@ else
     echo "System group 'mama' already exists."
 fi
 
-# Add invoking user to 'mama' group if run under sudo
+# Add invoking user to 'mama' and 'kvm' groups if run under sudo
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-    echo "Adding user '$SUDO_USER' to group 'mama'..."
-    usermod -aG mama "$SUDO_USER"
+    echo "Adding user '$SUDO_USER' to groups 'mama' and 'kvm'..."
+    usermod -aG mama,kvm "$SUDO_USER"
 fi
 
 # 2. Directory Layout Setup in /usr/share/mama
 echo "Setting up directory structure in /usr/share/mama..."
 mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
+
+# QEMU Bridge Helper Configuration
+echo "Configuring QEMU bridge helper permissions for br0..."
+mkdir -p /etc/qemu
+if ! grep -q "allow br0" /etc/qemu/bridge.conf 2>/dev/null; then
+    echo "allow br0" >> /etc/qemu/bridge.conf
+    chmod 0644 /etc/qemu/bridge.conf
+fi
 
 # Configuration Directory and Default mama.conf Setup
 echo "Setting up configuration in /etc/mama..."

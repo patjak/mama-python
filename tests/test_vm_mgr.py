@@ -73,8 +73,9 @@ class TestVmMgr(unittest.TestCase):
         config.VM_DEFAULT_RAM_MB = 4096
         cmd = build_qemu_cmd(self.mach, self.pid_path, self.vmlog_path)
 
-        # Check binary name
-        self.assertIn("qemu-system-x86_64", cmd[0] if "sudo" not in cmd[0] else cmd[1])
+        # Check binary name without sudo
+        self.assertEqual(cmd[0], "qemu-system-x86_64")
+        self.assertNotIn("sudo", cmd)
 
         # Check configured memory
         m_idx = cmd.index("-m")
@@ -89,6 +90,17 @@ class TestVmMgr(unittest.TestCase):
 
         # Ensure legacy -net nic and -net bridge are NOT present
         self.assertNotIn("-net", cmd)
+
+    @patch("mama.vm_mgr.is_in_kvm_group", return_value=False)
+    def test_start_vm_warns_when_not_in_kvm_group(self, mock_kvm):
+        from mama.vm_mgr import start_vm
+        mach = Machine(name="vm-1", os="x86_64/test", kernel="6.4")
+        mach.error = MagicMock()
+        with patch("mama.vm_mgr.get_vm_pid", return_value=None):
+            res = start_vm(mach)
+            self.assertFalse(res)
+            mach.error.assert_called_once()
+            self.assertIn("kvm", mach.error.call_args[0][0])
 
     def test_build_qemu_cmd_custom_memory_override(self):
         self.mach.vm_params = "-m 8192"
