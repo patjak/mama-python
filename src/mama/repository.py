@@ -173,6 +173,58 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
+    def try_reserve(cls, name: str, user: str) -> tuple[bool, str]:
+        """Atomically reserve a machine if not already reserved.
+        Returns (success: bool, current_reservation: str).
+        """
+        with cls._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            row = conn.execute("SELECT reservation FROM machines WHERE name = ?", (name,)).fetchone()
+            if not row:
+                conn.rollback()
+                return False, ""
+            curr_res = row["reservation"] or ""
+            if curr_res:
+                conn.rollback()
+                return False, curr_res
+
+            cursor = conn.execute(
+                "UPDATE machines SET reservation = ? WHERE name = ? AND (reservation IS NULL OR reservation = '')",
+                (user, name),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                return True, user
+
+            row = conn.execute("SELECT reservation FROM machines WHERE name = ?", (name,)).fetchone()
+            return False, row["reservation"] if row else ""
+
+    @classmethod
+    def release_reservation(cls, name: str, user: str = "", force: bool = False) -> tuple[bool, str]:
+        """Release reservation for a machine.
+        If force is True, clears reservation regardless of owner.
+        If force is False, only clears if current reservation matches user.
+        Returns (success: bool, error_msg: str).
+        """
+        with cls._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            row = conn.execute("SELECT reservation FROM machines WHERE name = ?", (name,)).fetchone()
+            if not row:
+                conn.rollback()
+                return False, f"Machine '{name}' not found"
+            curr_res = row["reservation"] or ""
+            if not curr_res:
+                conn.rollback()
+                return False, "Machine is not reserved"
+            if not force and curr_res != user:
+                conn.rollback()
+                return False, f"Held by '{curr_res}', not '{user}'"
+
+            conn.execute("UPDATE machines SET reservation = '' WHERE name = ?", (name,))
+            conn.commit()
+            return True, ""
+
+    @classmethod
     def upsert_machine(cls, m_dict: Dict[str, Any]) -> None:
         """Full upsert for adding or completely updating a machine."""
         columns = [

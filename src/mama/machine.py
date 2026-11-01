@@ -1059,9 +1059,19 @@ class Machine:
             logfile=logfile,
         )
 
-    def reserve(self, user: str) -> None:
-        self.reservation = user
-        MachineRepository.update_fields(self.name, {"reservation": user})
+    def reserve(self, user: str, force: bool = False) -> tuple[bool, str]:
+        if user:
+            success, holder = MachineRepository.try_reserve(self.name, user)
+            if success:
+                self.reservation = user
+                return True, user
+            return False, holder
+        else:
+            success, err = MachineRepository.release_reservation(self.name, user=self.reservation, force=force)
+            if success:
+                self.reservation = ""
+                return True, ""
+            return False, err
 
     def get_kernels(self) -> Dict[str, str]:
         path = pathlib.Path(self.get_kernel_path())

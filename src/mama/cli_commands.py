@@ -803,28 +803,27 @@ def cmd_connect(arg: Union[str, bool]) -> None:
 def cmd_reserve(arg: Union[str, bool]) -> None:
     mach = select_machine(arg)
     if isinstance(mach, Machine):
-        if mach.reservation:
-            fatal(f"Machine is already reserved by: {mach.reservation}")
-
         user = Util.get_user()
-        mach.reserve(user)
+        success, holder = mach.reserve(user)
+        if not success:
+            fatal(f"Machine is already reserved by: {holder}")
+        out(f"Machine '{mach.name}' reserved for {user}.")
 
 
 def cmd_release(arg: Union[str, bool, None] = False, force: bool = False) -> None:
     mach = select_machine(arg)
     if isinstance(mach, Machine):
-        if not mach.reservation and not force:
-            fatal("Machine is not reserved")
-
-        if not force:
-            user = Util.get_user()
-            if mach.reservation != user:
+        user = Util.get_user()
+        success, err = MachineRepository.release_reservation(mach.name, user=user, force=force)
+        if not success:
+            if not force and "Held by" in err:
                 fatal(
-                    "Failed to release machine. You do not hold the reservation. "
+                    f"Failed to release machine. You do not hold the reservation ({err}). "
                     "Use `mama release <machine> --force` to force release."
                 )
+            fatal(err)
 
-        mach.reserve("")
+        mach.reservation = ""
         out(f"Released reservation for machine '{mach.name}'.")
 
 
