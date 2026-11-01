@@ -123,39 +123,45 @@ class Job:
         self._wait_for_active_job(job_str)
 
         worker_mach = select_machine(worker)
-        if not worker_mach.is_idle():
-            self.out(f"Waiting for job to finish: {worker_mach.job}")
+        if not isinstance(worker_mach, Machine):
+            self.fatal(f"Worker machine '{worker}' not found")
 
+        pid = os.getpid()
+        JobQueue.enqueue(worker_mach.name, job_str, pid)
         console = Console()
-        with JobQueue.track(worker_mach.name, job_str):
-            while not worker_mach.is_idle():
-                with console.status(f"[bold yellow]Waiting for worker machine '{worker_mach.name}' job to finish: {worker_mach.job}...[/bold yellow]"):
-                    time.sleep(10)
-                    worker_mach.load()
-                    worker_mach.detect_and_clear_stale_job()
+        try:
+            while not JobQueue.try_claim_machine(worker_mach.name, job_str, pid):
+                worker_mach.load()
+                with console.status(
+                    f"[bold yellow]Waiting for worker machine '{worker_mach.name}' in queue: {worker_mach.job}...[/bold yellow]"
+                ):
+                    time.sleep(5)
 
-        prev_job = worker_mach.job
-        prev_job_pid = worker_mach.job_pid
-        worker_mach.job = job_str
-        worker_mach.job_pid = str(os.getpid())
-        worker_mach.save()
+            worker_mach.load()
 
-        if Os.is_runnable(arch, os_name, worker_mach):
-            worker_mach.set("os", Os(os_name, arch))
+            if Os.is_runnable(arch, os_name, worker_mach):
+                worker_mach.set("os", Os(os_name, arch))
 
-        job_content = self._preprocess(job_content, arch, os_name, worker, False)
+            job_content = self._preprocess(job_content, arch, os_name, worker, False)
 
-        ret = self.execute(job_content, mach=False, worker=worker_mach)
-        worker_mach.stop()
-
-        worker_mach.load()
-        worker_mach.job = prev_job
-        worker_mach.job_pid = prev_job_pid
-        worker_mach.save()
-
-        if not ret:
-            self.fatal("Prepare job FAILED")
-        return ret
+            ret = self.execute(job_content, mach=False, worker=worker_mach)
+            if not ret:
+                self.error("Prepare job FAILED")
+            return ret
+        except KeyboardInterrupt:
+            self.error(f"\nPrepare job '{self.name}' interrupted by user (Ctrl+C). Cleaning up...")
+            return False
+        finally:
+            JobQueue.dequeue(worker_mach.name, pid)
+            worker_mach.load()
+            if str(worker_mach.job_pid) == str(pid):
+                worker_mach.job = ""
+                worker_mach.job_pid = ""
+                worker_mach.save()
+            try:
+                worker_mach.stop()
+            except Exception:
+                pass
 
     def execute_run_job(self) -> Union[bool, Any]:
         self.out(f"running job: {self.name} {self.arch} {self.os}")
@@ -173,44 +179,45 @@ class Job:
             return False
 
         mach = select_machine(mach_target)
-
-        if not mach:
+        if not isinstance(mach, Machine):
             self.error("Failed to find machine")
             return False
 
-        if not mach.is_idle():
-            self.out(f"Waiting for job to finish: {mach.job}")
-
         run_job_str = f"run {self.name} {arch}/{os_name}"
+        pid = os.getpid()
+        JobQueue.enqueue(mach.name, run_job_str, pid)
         console = Console()
-        with JobQueue.track(mach.name, run_job_str):
-            while not mach.is_idle():
-                with console.status(f"[bold yellow]Waiting for target machine '{mach.name}' job to finish: {mach.job}...[/bold yellow]"):
-                    time.sleep(10)
-                    mach.load()
-                    mach.detect_and_clear_stale_job()
+        try:
+            while not JobQueue.try_claim_machine(mach.name, run_job_str, pid):
+                mach.load()
+                with console.status(
+                    f"[bold yellow]Waiting for target machine '{mach.name}' in queue: {mach.job}...[/bold yellow]"
+                ):
+                    time.sleep(5)
 
-        prev_job = mach.job
-        prev_job_pid = mach.job_pid
-        mach.job = run_job_str
-        mach.job_pid = str(os.getpid())
-        mach.save()
+            mach.load()
 
-        if Os.is_runnable(arch, os_name, mach):
-            mach.set("os", Os(os_name, arch))
+            if Os.is_runnable(arch, os_name, mach):
+                mach.set("os", Os(os_name, arch))
 
-        job_content = self._preprocess(job_content, arch, os_name, False, mach)
+            job_content = self._preprocess(job_content, arch, os_name, False, mach)
 
-        ret = self.execute(job_content, mach=mach, worker=False)
-
-        mach.stop()
-
-        mach.load()
-        mach.job = prev_job
-        mach.job_pid = prev_job_pid
-        mach.save()
-
-        return ret
+            ret = self.execute(job_content, mach=mach, worker=False)
+            return ret
+        except KeyboardInterrupt:
+            self.error(f"\nRun job '{self.name}' interrupted by user (Ctrl+C). Cleaning up...")
+            return False
+        finally:
+            JobQueue.dequeue(mach.name, pid)
+            mach.load()
+            if str(mach.job_pid) == str(pid):
+                mach.job = ""
+                mach.job_pid = ""
+                mach.save()
+            try:
+                mach.stop()
+            except Exception:
+                pass
 
     def execute(self, job_content: str, mach: Any = False, worker: Any = False) -> bool:
         no_retry = self.no_retry
