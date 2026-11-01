@@ -658,12 +658,26 @@ def cmd_delete_os(machine: str, arch: str, os_name: str) -> None:
     if not Os.is_runnable(arch, os_name, mach):
         fatal("OS isn't installed and cannot be deleted")
 
+    target_os = f"{arch}/{os_name}"
     target = pathlib.Path(config.MAMA_PATH) / "machines" / machine / arch / os_name
     sudo_prefix = [] if Util.is_root() else ["sudo"]
     with mach.lock():
+        if mach.is_started and mach.os == target_os:
+            out(f"Machine '{mach.name}' is currently running '{target_os}'. Stopping machine...")
+            mach.stop()
+
         res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
         if res.returncode != 0:
             fatal(f"Failed to delete OS {machine}/{arch}/{os_name}")
+
+        if mach.os == target_os:
+            mach.os = ""
+            mach.kernel = ""
+            MachineRepository.update_fields(mach.name, {
+                "os": "",
+                "kernel": "",
+            })
+            out(f"Unset active OS and kernel on '{mach.name}' because '{target_os}' was deleted.")
 
 
 def cmd_copy_os(
