@@ -1,6 +1,7 @@
 import pathlib
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
@@ -76,6 +77,44 @@ class TestMachineStates(unittest.TestCase):
             state = mach.get_state()
             self.assertEqual(state, "offline")
             self.assertFalse(mach.is_started)
+
+    @patch("mama.machine.MachineRepository.update_fields")
+    @patch("mama.machine.subprocess.run")
+    @patch("mama.machine.Util.is_root", return_value=False)
+    def test_set_kernel_skips_sudo_when_initrd_already_readable(self, mock_is_root, mock_run, mock_update):
+        from unittest.mock import MagicMock
+        mach = Machine(name="m1", os="x86_64/test-os")
+        mach.get_kernels = MagicMock(return_value={"6.4.0": "2026-11-01"})
+
+        # Mock stat().st_mode on initrd to be 0o644 (already readable)
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value = MagicMock(st_mode=0o100644)
+                mach.set("kernel", "6.4.0")
+
+        # sudo chmod should NOT be called
+        mock_run.assert_not_called()
+        self.assertEqual(mach.kernel, "6.4.0")
+        mock_update.assert_called_with("m1", {"kernel": "6.4.0"})
+
+    @patch("mama.machine.MachineRepository.update_fields")
+    @patch("mama.machine.subprocess.run")
+    @patch("mama.machine.Util.is_root", return_value=False)
+    @patch("mama.machine.Os.is_runnable", return_value=True)
+    def test_set_os_skips_sudo_when_initrd_already_readable(self, mock_runnable, mock_is_root, mock_run, mock_update):
+        from unittest.mock import MagicMock
+        mach = Machine(name="m1")
+        mach.get_kernels = MagicMock(return_value={"6.4.0": "2026-11-01"})
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.stat") as mock_stat:
+                mock_stat.return_value = MagicMock(st_mode=0o100644)
+                mach.set("os", "x86_64/test-os")
+
+        # sudo chmod should NOT be called
+        mock_run.assert_not_called()
+        self.assertEqual(mach.os, "x86_64/test-os")
+        self.assertEqual(mach.kernel, "6.4.0")
 
 
 if __name__ == "__main__":

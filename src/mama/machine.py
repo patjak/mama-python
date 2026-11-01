@@ -724,12 +724,18 @@ class Machine:
                     val_str = name
 
         if val_str in kernels or val_str == "":
-            initrd = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / self.os / "boot" / f"initrd-{val_str}"
-            if initrd.exists():
-                if Util.is_root():
-                    initrd.chmod(0o644)
-                else:
-                    subprocess.run(["sudo", "chmod", "644", str(initrd)])
+            if val_str and self.os:
+                initrd = pathlib.Path(config.MAMA_PATH) / "machines" / self.name / self.os / "boot" / f"initrd-{val_str}"
+                if initrd.exists():
+                    try:
+                        cur_mode = initrd.stat().st_mode
+                        if not (cur_mode & 0o044):
+                            if Util.is_root():
+                                initrd.chmod(cur_mode | 0o644)
+                            else:
+                                subprocess.run(["sudo", "chmod", "644", str(initrd)], check=False)
+                    except OSError:
+                        pass
 
             self.kernel = val_str
             MachineRepository.update_fields(self.name, {"kernel": val_str})
