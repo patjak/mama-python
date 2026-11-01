@@ -1069,6 +1069,7 @@ class Machine:
         cmd: str,
         no_timeout: bool = False,
         timeout_mins: Optional[int] = None,
+        allocate_pty: bool = False,
     ) -> Union[int, bool]:
         if self.get_ssh_status() != "open":
             if not self.wait_for_state("online", 30, dont_print=True):
@@ -1084,13 +1085,16 @@ class Machine:
         effective_timeout = timeout_mins if timeout_mins is not None else self.ssh_cmd_timeout
 
         logfile = getattr(Log, "logfile", False)
-        return net_mgr.run_ssh_cmd(
-            ip=ip,
-            cmd=cmd,
-            timeout_mins=effective_timeout,
-            no_timeout=no_timeout,
-            logfile=logfile,
-        )
+        kwargs: Dict[str, Any] = {
+            "ip": ip,
+            "cmd": cmd,
+            "timeout_mins": effective_timeout,
+            "no_timeout": no_timeout,
+            "logfile": logfile,
+        }
+        if allocate_pty:
+            kwargs["allocate_pty"] = True
+        return net_mgr.run_ssh_cmd(**kwargs)
 
     def reserve(self, user: str, force: bool = False) -> tuple[bool, str]:
         if user:

@@ -1,4 +1,5 @@
 import pathlib
+from typing import Optional
 
 # Core Paths
 MAMA_PATH: str = "/usr/share/mama"
@@ -33,6 +34,10 @@ NFS_OPTIONS: str = "rw,async,no_root_squash,no_subtree_check,fsid=0"
 DEBUG: bool = False
 DEBUG_LOCK: bool = False
 DEBUG_PID: bool = False
+
+# Virtual Machine Defaults
+VM_DEFAULT_RAM_MB: int = 4096
+VM_DEFAULT_CPUS: Optional[int] = None
 
 # Machine Management Delays and Timeouts (in seconds, unless noted)
 START_TIMEOUT_DEFAULT: int = 4 * 60  # Default timeout to wait for machine boot

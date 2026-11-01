@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import platform
 import shlex
 import signal
 import subprocess
@@ -106,6 +107,88 @@ def kill_vm(machine_name: str) -> bool:
     return True
 
 
+def build_qemu_cmd(mach: Machine, pid_path: pathlib.Path, vmlog_path: pathlib.Path) -> list[str]:
+    """Assemble modern QEMU command arguments for virtual machine launch."""
+    num_cores = os.cpu_count() or 1
+    os_arch = mach.os.split("/")[0] if "/" in mach.os else mach.os
+    mama_arch = platform.machine() or subprocess.check_output(["uname", "-p"], text=True).strip()
+
+    if os_arch == "aarch64":
+        kernel_filename = f"Image-{mach.kernel}"
+    elif os_arch == "ppc64le":
+        kernel_filename = f"vmlinux-{mach.kernel}"
+    else:
+        kernel_filename = f"vmlinuz-{mach.kernel}"
+    initrd_filename = f"initrd-{mach.kernel}"
+
+    kernel = os.path.join(mach.get_kernel_path(), kernel_filename)
+    initrd = os.path.join(mach.get_kernel_path(), initrd_filename)
+
+    arch = "x86_64" if os_arch == "i686" else os_arch
+
+    qemu_cmd: list[str] = []
+    if not Util.is_root():
+        qemu_cmd.append("sudo")
+    qemu_cmd.append(f"qemu-system-{arch}")
+
+    user_vm_params = shlex.split(mach.vm_params) if mach.vm_params else []
+
+    # SMP / Cores configuration: use user setting if provided, else config default or host cores
+    if not any(arg in ("-smp", "--smp") for arg in user_vm_params):
+        configured_cpus = getattr(config, "VM_DEFAULT_CPUS", None)
+        cpus = configured_cpus if configured_cpus else num_cores
+        qemu_cmd.extend(["-smp", str(cpus)])
+
+    # RAM Memory configuration: use user setting if provided, else config default (4096 MB)
+    if not any(arg in ("-m", "--m") for arg in user_vm_params):
+        ram_mb = getattr(config, "VM_DEFAULT_RAM_MB", 4096)
+        qemu_cmd.extend(["-m", str(ram_mb)])
+
+    qemu_cmd.extend([
+        "-daemonize",
+        "-pidfile", str(pid_path),
+        "-netdev", "bridge,id=net0,br=br0",
+        "-device", f"virtio-net-pci,netdev=net0,mac={mach.mac}",
+        "-display", "none",
+        "-chardev", f"file,id=char0,path={vmlog_path}",
+        "-serial", "chardev:char0",
+        "-monitor", "none",
+    ])
+
+    if os_arch == "aarch64":
+        qemu_cmd.extend([
+            "-machine", "virt,gic-version=3",
+            "-cpu", "cortex-a72",
+            "-accel", "tcg,thread=multi,tb-size=1024",
+            "-bios", "/usr/share/qemu/qemu-uefi-aarch64.bin",
+        ])
+    elif os_arch == "ppc64le":
+        qemu_cmd.extend(["-M", "pseries"])
+    else:
+        qemu_cmd.extend(["-cpu", "host"])
+
+    append_params = (
+        f"{mach.boot_params} ip=dhcp rd.neednet=1 ifname=lan0:{mach.mac} "
+        f"systemd.hostname={mach.name} "
+        f"root=nfs:{config.MAMA_HOST}:/machines/{mach.name}/{mach.os},rw,vers=4,nconnect=16 "
+        f"console=ttyS0 console=tty"
+    ).strip()
+
+    qemu_cmd.extend([
+        "-kernel", kernel,
+        "-initrd", initrd,
+        "-append", append_params,
+    ])
+
+    if arch == mama_arch and pathlib.Path("/dev/kvm").exists():
+        qemu_cmd.append("-enable-kvm")
+
+    if user_vm_params:
+        qemu_cmd.extend(user_vm_params)
+
+    return qemu_cmd
+
+
 def start_vm(mach: Machine) -> bool:
     """Launch virtual instance of machine using QEMU."""
     if not Util.is_root():
@@ -152,72 +235,7 @@ def start_vm(mach: Machine) -> bool:
 
     mach.out(f"Starting virtual machine with OS {mach.os} and kernel {mach.kernel}")
 
-    num_cores = os.cpu_count() or 1
-    os_arch = mach.os.split("/")[0] if "/" in mach.os else mach.os
-    mama_arch = subprocess.check_output(["uname", "-p"], text=True).strip()
-
-    if os_arch == "aarch64":
-        kernel_filename = f"Image-{mach.kernel}"
-    elif os_arch == "ppc64le":
-        kernel_filename = f"vmlinux-{mach.kernel}"
-    else:
-        kernel_filename = f"vmlinuz-{mach.kernel}"
-    initrd_filename = f"initrd-{mach.kernel}"
-
-    kernel = os.path.join(mach.get_kernel_path(), kernel_filename)
-    initrd = os.path.join(mach.get_kernel_path(), initrd_filename)
-
-    arch = "x86_64" if os_arch == "i686" else os_arch
-
-    qemu_cmd = []
-    if not Util.is_root():
-        qemu_cmd.append("sudo")
-    qemu_cmd.append(f"qemu-system-{arch}")
-
-    qemu_cmd.extend([
-        "-daemonize",
-        "-pidfile", str(pid_path),
-        "-smp", str(num_cores),
-        "-m", str(1024 * 44),
-        "-net", f"nic,model=virtio,macaddr={mach.mac}",
-        "-net", "bridge,br=br0",
-        "-display", "none",
-        "-chardev", f"file,id=char0,path={vmlog_path}",
-        "-serial", "chardev:char0",
-        "-monitor", "none",
-    ])
-
-    if os_arch == "aarch64":
-        qemu_cmd.extend([
-            "-machine", "virt,gic-version=3",
-            "-cpu", "cortex-a72",
-            "-accel", "tcg,thread=multi,tb-size=1024",
-            "-bios", "/usr/share/qemu/qemu-uefi-aarch64.bin",
-        ])
-    elif os_arch == "ppc64le":
-        qemu_cmd.extend(["-M", "pseries"])
-    else:
-        qemu_cmd.extend(["-cpu", "host"])
-
-    append_params = (
-        f"{mach.boot_params} ip=dhcp rd.neednet=1 ifname=lan0:{mach.mac} "
-        f"systemd.hostname={mach.name} "
-        f"root=nfs:{config.MAMA_HOST}:/machines/{mach.name}/{mach.os},rw,vers=4,nconnect=16 "
-        f"console=ttyS0 console=tty"
-    ).strip()
-
-    qemu_cmd.extend([
-        "-kernel", kernel,
-        "-initrd", initrd,
-        "-append", append_params,
-    ])
-
-    if arch == mama_arch:
-        qemu_cmd.append("-enable-kvm")
-
-    if mach.vm_params:
-        qemu_cmd.extend(shlex.split(mach.vm_params))
-
+    qemu_cmd = build_qemu_cmd(mach, pid_path, vmlog_path)
     mach.debug(shlex.join(qemu_cmd))
     res = subprocess.run(qemu_cmd)
     if res.returncode != 0:

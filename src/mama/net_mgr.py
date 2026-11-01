@@ -144,16 +144,18 @@ def run_ssh_cmd(
     timeout_mins: int = 1,
     no_timeout: bool = False,
     logfile: Union[str, bool] = False,
+    allocate_pty: bool = False,
 ) -> int:
     """Execute command on remote machine via SSH."""
+    pty_flag = "-t" if allocate_pty else "-T"
     ssh_args = [
         "ssh",
         "-q",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ConnectTimeout=10",
         "-o", "StrictHostKeyChecking=no",
+        pty_flag,
         f"root@{ip}",
-        "-t",
         cmd,
     ]
 
