@@ -66,6 +66,17 @@ class TestMachineLock(unittest.TestCase):
         self.assertFalse(res)
         self.assertEqual(_HELD_MACHINE_LOCKS.get("box1", 0), 0)
 
+    def test_os_lock_acquires_and_releases(self):
+        from mama.os_mgr import Os
+        lock_file = pathlib.Path(self.temp_dir.name) / "locks" / "os-x86_64-tumbleweed.lock"
+        self.assertFalse(lock_file.exists())
+
+        with Os.lock("x86_64", "tumbleweed", shared=False):
+            self.assertTrue(lock_file.exists())
+
+        with Os.lock("x86_64", "tumbleweed", shared=True):
+            self.assertTrue(lock_file.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import os
 import pathlib
+import tempfile
 from typing import Any, List, Optional
 
 # Environment & helper stubs
@@ -20,16 +21,20 @@ class Os:
     @contextlib.contextmanager
     def lock(arch: str, os_name: str, shared: bool = False):
         """Advisory filesystem lock for an OS template."""
-        lock_dir = pathlib.Path(config.MAMA_PATH) / "os" / arch
+        clean_os = os_name.replace("/", "_")
+        lock_dir = pathlib.Path(config.MAMA_PATH) / "locks"
         try:
             lock_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        lock_file = lock_dir / f".{os_name}.lock"
+        except (PermissionError, OSError):
+            lock_dir = pathlib.Path(tempfile.gettempdir()) / "mama-locks"
+            lock_dir.mkdir(parents=True, exist_ok=True)
+
+        lock_file = lock_dir / f"os-{arch}-{clean_os}.lock"
         try:
-            if not lock_file.exists():
-                lock_file.touch(mode=0o666, exist_ok=True)
-        except Exception:
+            lock_file.touch(mode=0o664, exist_ok=True)
+            if Util.is_root():
+                lock_file.chmod(0o664)
+        except OSError:
             pass
 
         operation = fcntl.LOCK_SH if shared else fcntl.LOCK_EX

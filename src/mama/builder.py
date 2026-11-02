@@ -102,9 +102,6 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     """Execute local Kiwi-ng build, mount proc/sys, chroot dracut initramfs generation, and install authorized_keys."""
     packages_list = [f"--add-package={p}" for p in packages.split()]
 
-    if not Util.is_root():
-        out("You must be root to run this command")
-
     desc_path = os.path.join(config.MAMA_PATH, "os-descriptions", "")
     archs = Util.get_directory_contents(desc_path, 1)
     oses = Util.get_directory_contents(desc_path, 2)
