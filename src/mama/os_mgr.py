@@ -95,3 +95,20 @@ class Arch:
                 archs.append(arch)
 
         return archs
+
+    @staticmethod
+    def get_supported_archs() -> List[str]:
+        """Return list of supported architectures, prioritizing host architecture and existing descriptions."""
+        standard = ["x86_64", "aarch64", "ppc64le", "s390x", "i686", "riscv64"]
+        try:
+            host = os.uname().machine
+        except Exception:
+            host = "x86_64"
+        res = [host] if host else []
+        for a in Arch.get_buildable():
+            if a not in res:
+                res.append(a)
+        for a in standard:
+            if a not in res:
+                res.append(a)
+        return res

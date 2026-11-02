@@ -403,8 +403,8 @@ def cmd_new() -> None:
         else:
             mac = ans_str
 
-    archs = Arch.get_buildable()
-    arch = questionary.select("Select Architecture:", choices=archs).ask()
+    archs = Arch.get_buildable() or Arch.get_supported_archs()
+    arch = questionary.select("Select Architecture:", choices=archs, default=archs[0] if archs else "x86_64").ask()
     if not arch:
         return
 
@@ -1091,13 +1091,11 @@ def cmd_new_os_desc(
 
     # 1. Target Architecture
     if not arch:
-        buildable = Arch.get_buildable()
-        host_arch = os.uname().machine
-        default_choice = host_arch if host_arch in buildable else (buildable[0] if buildable else "x86_64")
+        choices = Arch.get_supported_archs()
         ans = questionary.select(
             "Select Target Architecture:",
-            choices=buildable,
-            default=default_choice,
+            choices=choices,
+            default=choices[0] if choices else "x86_64",
         ).ask()
         if not ans:
             return

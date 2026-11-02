@@ -193,6 +193,27 @@ class TestDescGenerator(unittest.TestCase):
         self.assertEqual(args.kernel, "kotd")
         self.assertEqual(args.name, "cli-test-desc")
 
+    @patch("questionary.checkbox")
+    @patch("questionary.text")
+    @patch("questionary.select")
+    def test_cmd_new_os_desc_interactive_when_no_existing_descriptions(
+        self, mock_select, mock_text, mock_checkbox
+    ):
+        mock_select.return_value.ask.side_effect = [
+            "x86_64",
+            "openSUSE",
+            "Leap 16.1",
+            "Stock (Distribution default)",
+        ]
+        mock_text.return_value.ask.return_value = "interactive-leap-16.1"
+        mock_checkbox.return_value.ask.return_value = ["baseline"]
+
+        cmd_new_os_desc()
+
+        expected_dir = pathlib.Path(self.temp_dir.name) / "os-descriptions" / "x86_64" / "interactive-leap-16.1"
+        self.assertTrue(expected_dir.is_dir())
+        self.assertTrue((expected_dir / "appliance.kiwi").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
