@@ -146,7 +146,7 @@ fi
 
 # 9. Initialize Default Worker Machines (jobs and os-builder)
 echo "Initializing default worker machines in database..."
-PYTHONPATH="$SCRIPT_DIR/src" python3 -c '
+PYTHONPATH="${SCRIPT_DIR}/src:${SCRIPT_DIR}:/usr/share/mama/src:/usr/share/mama" python3 -c '
 from mama.repository import MachineRepository
 import os, pathlib
 
@@ -175,11 +175,13 @@ locks_dir = pathlib.Path("/usr/share/mama/locks")
 locks_dir.mkdir(parents=True, exist_ok=True)
 
 for w in default_workers:
-    if not MachineRepository.get_by_name(w["name"]):
+    w_name = w["name"]
+    w_mac = w["mac"]
+    if not MachineRepository.get_by_name(w_name):
         MachineRepository.upsert_machine(w)
-        print(f"  -> Created default worker machine: {w[\"name\"]} ({w[\"mac\"]}, VM)")
+        print(f"  -> Created default worker machine: {w_name} ({w_mac}, VM)")
 
-    lock_file = locks_dir / f"{w[\"name\"]}.lock"
+    lock_file = locks_dir / f"{w_name}.lock"
     lock_file.touch(mode=0o664, exist_ok=True)
 '
 chgrp mama /usr/share/mama/locks/*.lock 2>/dev/null || true
