@@ -35,15 +35,21 @@ echo "Setting up directory structure in /usr/share/mama..."
 mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
 
 # 3. Targeted Non-Recursive Permissions
-# Allow group 'mama' to manage SQLite and logs, while preserving rootfs files in machines/ and os/
+# Allow group 'mama' to manage SQLite, logs, and OS descriptions while preserving rootfs files in machines/ and os/
 echo "Applying non-recursive permissions on /usr/share/mama..."
-chgrp mama /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
-chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
+chgrp mama /usr/share/mama /usr/share/mama/log /usr/share/mama/locks /usr/share/mama/os-descriptions
+chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks /usr/share/mama/os-descriptions
 
 # Ensure database file exists and is group-writable by group 'mama'
 touch /usr/share/mama/mama.db
 chgrp mama /usr/share/mama/mama.db* 2>/dev/null || true
 chmod 0664 /usr/share/mama/mama.db* 2>/dev/null || true
+
+if [ -d /usr/share/mama/os-descriptions ]; then
+    chgrp -R mama /usr/share/mama/os-descriptions 2>/dev/null || true
+    find /usr/share/mama/os-descriptions -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find /usr/share/mama/os-descriptions -type f -exec chmod 0664 {} + 2>/dev/null || true
+fi
 
 if [ -d /usr/share/mama/log ]; then
     chgrp -R mama /usr/share/mama/log
