@@ -111,16 +111,49 @@ sudo sysctl -p /etc/sysctl.d/99-mama.conf
 
 ---
 
-## 4. Storage & NFS Server Configuration
+## 4. User Groups, Permissions & Storage Setup
 
-MAMA exports `/usr/share/mama` over NFSv4 so booted target machines and remote builders can mount their root filesystems.
+MAMA uses targeted group-level permissions via the `mama` system group so developers can manage machines, SQLite databases, locks, and logs without `sudo`, while requiring `kvm` for running virtual machines.
 
-### Step 4.1: Create Directory Structure
+### Step 4.1: Create System Group & Add Users
+Create the `mama` system group and add your user account to both `mama` and `kvm`:
+
 ```bash
-sudo mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log}
+# Create system group
+sudo groupadd -r mama
+
+# Add current user to mama and kvm groups
+sudo usermod -aG mama,kvm $USER
 ```
 
-### Step 4.2: Configure NFS Export
+> **Note:** Run `newgrp mama` and `newgrp kvm` (or log out and back in) for group membership to take effect in your current shell.
+
+### Step 4.2: Create Directory Structure
+Create the required directory hierarchy under `/usr/share/mama`:
+
+```bash
+sudo mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
+```
+
+### Step 4.3: Configure Permissions & SGID
+Set group ownership to `mama` and enable the setgid (`2775`) bit on shared directories:
+
+```bash
+# Set group ownership on shared management directories
+sudo chgrp mama /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
+sudo chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
+
+# Ensure database files (when created) are group writable
+sudo touch /usr/share/mama/mama.db
+sudo chgrp mama /usr/share/mama/mama.db* 2>/dev/null || true
+sudo chmod 0664 /usr/share/mama/mama.db* 2>/dev/null || true
+```
+
+> **Security & Rootfs Integrity:** Do **NOT** run `chmod -R` or `chgrp -R` across `/usr/share/mama/`. The subdirectories `/usr/share/mama/machines/` and `/usr/share/mama/os/` contain unpacked guest Linux root filesystems whose file ownership (`root:root`, `/etc/shadow`, setuid binaries) must remain preserved.
+
+### Step 4.4: Configure NFS Export
+MAMA exports `/usr/share/mama` over NFSv4 so booted target machines and remote builders can mount their root filesystems.
+
 Create an export drop-in under `/etc/exports.d/`:
 
 ```bash
@@ -128,7 +161,7 @@ sudo mkdir -p /etc/exports.d
 echo '/usr/share/mama 192.168.2.0/24(rw,async,no_root_squash,no_subtree_check,fsid=0)' | sudo tee /etc/exports.d/mama.exports
 ```
 
-### Step 4.3: Enable and Start NFS Service
+### Step 4.5: Enable and Start NFS Service
 ```bash
 sudo systemctl enable --now nfs-server
 ```
