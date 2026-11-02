@@ -6,7 +6,7 @@ import os
 import pathlib
 import re
 import sys
-from typing import Any, List, Optional, Union
+from typing import Any, Iterable, List, Optional, Set, Union
 
 
 class Util:
@@ -49,6 +49,18 @@ class Util:
             return False
         pattern = r"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$"
         return bool(re.match(pattern, mac.strip()))
+
+    @staticmethod
+    def generate_auto_mac(existing_macs: Optional[Iterable[str]] = None) -> str:
+        """Generate next available MAC address in the format de:ad:be:ef:xx:xx starting at de:ad:be:ef:00:01."""
+        if existing_macs is None:
+            existing_macs = set()
+        normalized_existing = {m.strip().lower() for m in existing_macs if m}
+        for i in range(1, 0x10000):
+            candidate = f"de:ad:be:ef:{i >> 8:02x}:{i & 0xff:02x}"
+            if candidate not in normalized_existing:
+                return candidate
+        raise ValueError("Exhausted auto-generated MAC address space (de:ad:be:ef:00:01 - de:ad:be:ef:ff:ff)")
 
     @staticmethod
     def pad_str(val: Any, length: int) -> str:

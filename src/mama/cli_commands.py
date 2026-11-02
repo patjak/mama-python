@@ -389,12 +389,19 @@ def cmd_new() -> None:
 
     mac = ""
     while not Util.is_valid_mac(mac):
-        ans = questionary.text("MAC:").ask()
-        if not ans:
+        ans = questionary.text("MAC (leave empty to auto-generate):").ask()
+        if ans is None:
             return
-        mac = ans.strip()
-        if not Util.is_valid_mac(mac):
+        ans_str = ans.strip()
+        if not ans_str:
+            existing_macs = {m.get("mac", "") for m in MachineRepository.get_all()}
+            mac = Util.generate_auto_mac(existing_macs)
+            out(f"Auto-generated MAC: {mac}")
+            break
+        if not Util.is_valid_mac(ans_str):
             error("Invalid MAC address format (e.g. 52:54:00:12:34:56)")
+        else:
+            mac = ans_str
 
     archs = Arch.get_buildable()
     arch = questionary.select("Select Architecture:", choices=archs).ask()
