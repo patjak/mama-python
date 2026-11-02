@@ -976,7 +976,7 @@ def cmd_set(machine: Union[str, bool, None] = False, attr: Optional[str] = None,
 
     mach.set(attr, val)
 
-    if attr in ("ip", "mac") and getattr(config, "DHCP_ENABLED", True):
+    if attr in ("ip", "mac", "name") and getattr(config, "DHCP_ENABLED", True):
         if Util.is_root():
             DnsmasqManager.reload_or_restart()
         else:

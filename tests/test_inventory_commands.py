@@ -113,6 +113,91 @@ class TestInventoryCommands(unittest.TestCase):
         self.assertIsNotNone(m2)
         self.assertEqual(m2["mac"], "de:ad:be:ef:00:02")
 
+    def test_set_machine_name_success(self):
+        from mama.machine import Machine
+
+        # Create machine directories, locks, and logs
+        mach_dir = pathlib.Path(config.MAMA_PATH) / "machines" / "rename-box"
+        mach_dir.mkdir(parents=True, exist_ok=True)
+        locks_dir = pathlib.Path(config.MAMA_PATH) / "locks"
+        locks_dir.mkdir(parents=True, exist_ok=True)
+        (locks_dir / "rename-box.lock").touch()
+        log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / "rename-box").write_text("log content\n")
+
+        # Insert machine in DB
+        MachineRepository.upsert_machine({
+            "name": "rename-box",
+            "mac": "de:ad:be:ef:00:10",
+            "state": "offline",
+            "_is_started": 0,
+        })
+        MachineRepository.record_start_time("rename-box", "test-os", "vm", 12)
+
+        mach = Machine("rename-box")
+        mach.set("name", "renamed-box")
+
+        self.assertEqual(mach.name, "renamed-box")
+        self.assertIsNone(MachineRepository.get_by_name("rename-box"))
+        m_new = MachineRepository.get_by_name("renamed-box")
+        self.assertIsNotNone(m_new)
+        self.assertEqual(m_new["mac"], "de:ad:be:ef:00:10")
+
+        # Check on-disk assets renamed
+        self.assertFalse(mach_dir.exists())
+        self.assertTrue((pathlib.Path(config.MAMA_PATH) / "machines" / "renamed-box").exists())
+        self.assertFalse((locks_dir / "rename-box.lock").exists())
+        self.assertTrue((locks_dir / "renamed-box.lock").exists())
+        self.assertFalse((log_dir / "rename-box").exists())
+        self.assertTrue((log_dir / "renamed-box").exists())
+
+    def test_set_machine_name_fails_when_running(self):
+        from mama.machine import Machine
+
+        MachineRepository.upsert_machine({
+            "name": "running-box",
+            "mac": "de:ad:be:ef:00:20",
+            "state": "online",
+            "_is_started": 1,
+        })
+        mach = Machine("running-box")
+        mach.set("name", "new-name")
+
+        # Name must remain unchanged
+        self.assertEqual(mach.name, "running-box")
+        self.assertIsNotNone(MachineRepository.get_by_name("running-box"))
+        self.assertIsNone(MachineRepository.get_by_name("new-name"))
+
+    def test_set_machine_name_fails_when_already_exists(self):
+        from mama.machine import Machine
+
+        MachineRepository.upsert_machine({"name": "box-a", "mac": "de:ad:be:ef:00:21", "state": "offline", "_is_started": 0})
+        MachineRepository.upsert_machine({"name": "box-b", "mac": "de:ad:be:ef:00:22", "state": "offline", "_is_started": 0})
+
+        mach = Machine("box-a")
+        mach.set("name", "box-b")
+
+        self.assertEqual(mach.name, "box-a")
+        self.assertIsNotNone(MachineRepository.get_by_name("box-a"))
+
+    def test_set_machine_name_fails_when_job_active(self):
+        from mama.machine import Machine
+
+        MachineRepository.upsert_machine({
+            "name": "busy-box",
+            "mac": "de:ad:be:ef:00:23",
+            "state": "offline",
+            "_is_started": 0,
+            "job": "igt",
+        })
+        mach = Machine("busy-box")
+        with patch.object(Machine, "is_job_stale", return_value=False):
+            mach.set("name", "new-box")
+
+        self.assertEqual(mach.name, "busy-box")
+        self.assertIsNotNone(MachineRepository.get_by_name("busy-box"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -309,6 +309,16 @@ class MachineRepository:
             conn.commit()
 
     @classmethod
+    def rename_machine(cls, old_name: str, new_name: str) -> None:
+        """Atomically rename a machine across machines, boot_history, and job_queue tables."""
+        with cls._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("UPDATE machines SET name = ? WHERE name = ?;", (new_name, old_name))
+            conn.execute("UPDATE boot_history SET machine_name = ? WHERE machine_name = ?;", (new_name, old_name))
+            conn.execute("UPDATE job_queue SET machine_name = ? WHERE machine_name = ?;", (new_name, old_name))
+            conn.commit()
+
+    @classmethod
     def record_start_time(
         cls,
         machine_name: str,

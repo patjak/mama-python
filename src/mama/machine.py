@@ -6,6 +6,7 @@ import datetime
 import fcntl
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import time
@@ -68,6 +69,7 @@ class Machine:
     )
 
     SETTABLE_FIELDS: ClassVar[Dict[str, Tuple[str, str, str]]] = {
+        "name": ("Name", "Enter new machine name:", "name"),
         "ip": ("IP address", "Enter new IP address:", "ip"),
         "mac": ("MAC address", "Enter new MAC address:", "mac"),
         "resources": ("resources", "Enter new resources (space separated):", "resources"),
@@ -790,6 +792,70 @@ class Machine:
                 self.only_vm = new_bool
                 MachineRepository.update_fields(self.name, {"only_vm": 1 if new_bool else 0})
                 self.out(f"Setting only_vm to: {'yes' if new_bool else 'no'}")
+            elif field_name == "name":
+                self.load()
+                new_name = str(val).strip()
+                if not new_name:
+                    self.error("Machine name cannot be empty")
+                    return
+                if new_name == self.name:
+                    return
+
+                if not re.match(r"^[a-zA-Z0-9_\-\.]+$", new_name):
+                    self.error(f"Invalid machine name '{new_name}'. Use only alphanumeric characters, dashes, and underscores.")
+                    return
+
+                if self.is_started or self.get_state() != "offline":
+                    self.error(f"Cannot rename '{self.name}' while it is running. Stop the machine first.")
+                    return
+
+                if self.job and not self.is_job_stale():
+                    self.error(f"Cannot rename '{self.name}' while a job is running.")
+                    return
+
+                if MachineRepository.get_by_name(new_name):
+                    self.error(f"Machine with name '{new_name}' already exists.")
+                    return
+
+                old_name = self.name
+
+                MachineRepository.rename_machine(old_name, new_name)
+
+                old_dir = pathlib.Path(config.MAMA_PATH) / "machines" / old_name
+                new_dir = pathlib.Path(config.MAMA_PATH) / "machines" / new_name
+                if old_dir.exists():
+                    try:
+                        old_dir.rename(new_dir)
+                    except PermissionError:
+                        if Util.is_root():
+                            self.error(f"Failed to rename machine directory: {old_dir}")
+                        else:
+                            res = subprocess.run(["sudo", "mv", str(old_dir), str(new_dir)], check=False)
+                            if res.returncode != 0:
+                                self.error("Failed to rename machine directory with sudo")
+                    except OSError as e:
+                        self.error(f"Failed to rename machine directory: {e}")
+
+                locks_dir = pathlib.Path(config.MAMA_PATH) / "locks"
+                old_lock = locks_dir / f"{old_name}.lock"
+                new_lock = locks_dir / f"{new_name}.lock"
+                if old_lock.exists():
+                    try:
+                        old_lock.rename(new_lock)
+                    except OSError:
+                        pass
+
+                log_dir = pathlib.Path(config.MAMA_PATH) / "log"
+                if log_dir.exists():
+                    for log_file in list(log_dir.glob(f"{old_name}*")):
+                        suffix = log_file.name[len(old_name):]
+                        try:
+                            log_file.rename(log_dir / f"{new_name}{suffix}")
+                        except OSError:
+                            pass
+
+                self.name = new_name
+                self.out(f"Machine successfully renamed from '{old_name}' to '{new_name}'")
             elif field_name == "mac":
                 new_val = str(val).strip()
                 if new_val and not Util.is_valid_mac(new_val):
