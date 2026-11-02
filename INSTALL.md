@@ -21,7 +21,7 @@ MAMA relies on the following core services to provide network booting, state tra
 
 ## 1. Install System Packages
 
-Install the required system services, Python tools, QEMU emulators, and boot binaries via `zypper`:
+Install the required host system packages, Python runtime tools, QEMU emulators, and bootloader binaries via `zypper`:
 
 ```bash
 sudo zypper refresh
@@ -52,7 +52,7 @@ sudo zypper install -y python3-kiwi
 MAMA requires a dedicated network bridge (`br0`) with a static IPv4 address (default: `192.168.2.1/24`) attached to the physical interface connected to your target test machines.
 
 ### Step 2.1: Find Your Physical Interface
-Run `ip link` or `nmcli device` to find your target network card (e.g., `ens19`, `eth1`):
+Run `nmcli device` to find your target network interface (e.g., `ens19`, `eth1`):
 ```bash
 nmcli device
 ```
@@ -87,7 +87,7 @@ ip addr show br0
 Target machines on the `192.168.2.0/24` subnet require access to DHCP, TFTP, HTTP, and NFS on the MAMA host, as well as internet access via NAT masquerading for package downloads.
 
 ### Step 3.1: Configure Firewalld
-Assign `br0` to the `trusted` zone (or open ports) and enable masquerading:
+Assign `br0` to the `trusted` zone and enable NAT masquerading:
 
 ```bash
 # Assign bridge to trusted zone
@@ -111,214 +111,83 @@ sudo sysctl -p /etc/sysctl.d/99-mama.conf
 
 ---
 
-## 4. User Groups, Permissions & Storage Setup
+## 4. Install MAMA
 
-MAMA uses targeted group-level permissions via the `mama` system group so developers can manage machines, SQLite databases, locks, and logs without `sudo`, while requiring `kvm` for running virtual machines.
-
-### Step 4.1: Create System Group & Add Users
-Create the `mama` system group and add your user account to both `mama` and `kvm`:
-
-```bash
-# Create system group
-sudo groupadd -r mama
-
-# Add current user to mama and kvm groups
-sudo usermod -aG mama,kvm $USER
-```
-
-> **Note:** Run `newgrp mama` and `newgrp kvm` (or log out and back in) for group membership to take effect in your current shell.
-
-### Step 4.2: Create Directory Structure
-Create the required directory hierarchy under `/usr/share/mama`:
-
-```bash
-sudo mkdir -p /usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}
-```
-
-### Step 4.3: Configure Permissions & SGID
-Set group ownership to `mama` and enable the setgid (`2775`) bit on shared directories:
-
-```bash
-# Set group ownership on shared management directories
-sudo chgrp mama /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
-sudo chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks
-
-# Ensure database files (when created) are group writable
-sudo touch /usr/share/mama/mama.db
-sudo chgrp mama /usr/share/mama/mama.db* 2>/dev/null || true
-sudo chmod 0664 /usr/share/mama/mama.db* 2>/dev/null || true
-```
-
-> **Security & Rootfs Integrity:** Do **NOT** run `chmod -R` or `chgrp -R` across `/usr/share/mama/`. The subdirectories `/usr/share/mama/machines/` and `/usr/share/mama/os/` contain unpacked guest Linux root filesystems whose file ownership (`root:root`, `/etc/shadow`, setuid binaries) must remain preserved.
-
-### Step 4.4: Configure NFS Export
-MAMA exports `/usr/share/mama` over NFSv4 so booted target machines and remote builders can mount their root filesystems.
-
-Create an export drop-in under `/etc/exports.d/`:
-
-```bash
-sudo mkdir -p /etc/exports.d
-echo '/usr/share/mama 192.168.2.0/24(rw,async,no_root_squash,no_subtree_check,fsid=0)' | sudo tee /etc/exports.d/mama.exports
-```
-
-### Step 4.5: Enable and Start NFS Service
-```bash
-sudo systemctl enable --now nfs-server
-```
-
-Verify export:
-```bash
-sudo exportfs -v
-```
-
----
-
-## 5. TFTP & iPXE Boot Binaries
-
-Modern MAMA uses `dnsmasq`'s built-in TFTP server serving files directly out of `/usr/share/mama/tftp`.
-
-Copy the vendor iPXE binaries provided by the `ipxe-bootimgs` package into the TFTP directory:
-
-```bash
-sudo mkdir -p /usr/share/mama/tftp
-
-# x86_64 UEFI firmware bootloader
-sudo cp /usr/share/ipxe/ipxe-x86_64.efi /usr/share/mama/tftp/ipxe.efi
-
-# Legacy BIOS PXE bootloader
-sudo cp /usr/share/ipxe/undionly.kpxe /usr/share/mama/tftp/undionly.kpxe
-
-# ARM64 UEFI firmware bootloader
-sudo cp /usr/share/ipxe/snp-arm64.efi /usr/share/mama/tftp/ipxe-arm64.efi
-```
-
----
-
-## 6. QEMU Bridge Helper Configuration
-
-To allow virtual machines (QEMU/KVM) to attach directly to `br0`:
-
-```bash
-sudo mkdir -p /etc/qemu
-echo "allow br0" | sudo tee -a /etc/qemu/bridge.conf
-```
-
----
-
-## 7. Install MAMA
-
-### Step 7.1: Clone the Repository
+### Step 4.1: Clone the Repository
 Clone MAMA to your desired location (e.g. `/usr/share/mama` or your local development directory):
 
 ```bash
-# Clone repository
 git clone https://github.com/patjak/mama-python.git /usr/share/mama
 cd /usr/share/mama
 ```
 
-### Step 7.2: Install Python Dependencies
-Install runtime Python dependencies using `pip` (or system packages):
+### Step 4.2: Install Python Dependencies
+Install runtime Python dependencies using `pip`:
 
 ```bash
 pip install -e ".[cli]"
 ```
 
-### Step 7.3: Run the Installer
-Run the installer script as root:
+### Step 4.3: Run the Automated Installer
+Execute `install.sh` as root:
 
 ```bash
 sudo ./install.sh
 ```
 
-The installer will:
-1. Create the `mama` system group.
-2. Add the invoking user (`$SUDO_USER`) to the `mama` and `kvm` groups.
-3. Configure QEMU bridge helper permissions (`/etc/qemu/bridge.conf`).
-4. Set up directory structures and configuration template (`/etc/mama/mama.conf`).
-5. Configure non-recursive permissions (`chmod 2775 /usr/share/mama /usr/share/mama/log /usr/share/mama/locks`).
-6. Install and enable the `mama-boot.service` systemd unit.
-7. Create symlinks for `/usr/bin/mama` and `/usr/local/bin/mama`.
+The installer automatically handles all MAMA environment and service setup:
+1. **System Group & Users**: Creates the `mama` system group and adds your user account to `mama` and `kvm`.
+2. **Directory Hierarchy**: Sets up `/usr/share/mama/{machines,os,os-descriptions,jobs,tftp,log,locks}`.
+3. **Permissions**: Applies targeted non-recursive permissions (`chmod 2775`, `chgrp mama`) to management directories and SQLite database files.
+4. **QEMU Bridge Helper**: Configures `/etc/qemu/bridge.conf` allowing unprivileged VM attachment to `br0`.
+5. **Configuration**: Creates default configuration in `/etc/mama/mama.conf`.
+6. **TFTP Bootloaders**: Stages vendor iPXE binaries (`ipxe.efi`, `undionly.kpxe`, `ipxe-arm64.efi`) into the TFTP root.
+7. **NFS Exports**: Configures `/etc/exports.d/mama.exports` and reloads `nfs-server`.
+8. **SSH Keys**: Stages your developer SSH public key into `/usr/share/mama/authorized_keys`.
+9. **Boot Service**: Installs, enables, and starts the `mama-boot.service` HTTP server.
+10. **CLI Links**: Symlinks the `mama` executable to `/usr/local/bin/mama`.
 
-> **Configuration**: Custom host IPs, DHCP ranges, or VM defaults can be configured in `/etc/mama/mama.conf`. Environment variables (e.g. `MAMA_HOST`, `MAMA_CONF`) can also be used to override settings.
-
-> **Important**: If your user account was just added to the `mama` and `kvm` groups, activate the new groups in your current shell:
+> **Activate Group Membership:** If your user account was just added to the `mama` and `kvm` groups, activate them in your current shell:
 > ```bash
 > newgrp mama
 > newgrp kvm
 > ```
-> (or log out and back in). Members of `mama` and `kvm` can start, monitor, and stop virtual and bare-metal machines without `sudo`.
+> (or log out and back in). Members of `mama` and `kvm` can start, monitor, and manage machines and VMs without `sudo`.
 
 ---
 
-## 8. Configure DHCP & DNS (dnsmasq)
+## 5. Synchronize DHCP Server (`dnsmasq`)
 
-Modern MAMA automatically generates `/etc/dnsmasq.d/mama.conf` and the TFTP boot script (`autoexec.ipxe`).
-
-### Step 8.1: Synchronize dnsmasq Configuration
-Run the synchronization command:
+Once MAMA is installed, synchronize the `dnsmasq` configuration and start the DHCP service:
 
 ```bash
 sudo mama dhcp sync
 ```
 
-> **Note (Jumbo Frames / MTU):** If your network runs Jumbo frames, you can pass `--mtu <value>` (e.g. `sudo mama dhcp sync --mtu 9000`) or set `dhcp_mtu = 9000` in `/etc/mama/mama.conf`.
+> **Jumbo Frames / MTU:** If your network runs Jumbo frames, you can pass `--mtu <value>` (e.g. `sudo mama dhcp sync --mtu 9000`) or set `dhcp_mtu = 9000` in `/etc/mama/mama.conf`.
 
-This will:
-- Write `/etc/dnsmasq.d/mama.conf` configured for bridge `br0` (DHCP range `192.168.2.100` – `192.168.2.200`).
-- Generate `/usr/share/mama/tftp/autoexec.ipxe` pointing to the MAMA boot server (`http://192.168.2.1:8080/boot.py?mac=${mac}`).
-- Automatically reload or restart the `dnsmasq` service.
-
-### Step 8.2: Enable dnsmasq on Boot
+Enable and start `dnsmasq` on boot:
 ```bash
 sudo systemctl enable --now dnsmasq
 ```
 
 ---
 
-## 9. Enable MAMA Boot Server
+## 6. Verification
 
-The `mama-boot` systemd service runs the internal HTTP server on port 8080, serving dynamic iPXE scripts and kernel/initrd boot images:
-
-```bash
-sudo systemctl enable --now mama-boot.service
-```
-
-Verify service status:
-```bash
-systemctl status mama-boot.service
-```
-
----
-
-## 10. Configure SSH Access
-
-Generate an SSH key pair (if you don't already have one) and place the public key in `/usr/share/mama/authorized_keys`. This key is automatically injected into booted machine root filesystems to allow MAMA to execute commands over SSH:
-
-```bash
-# Generate SSH key if not already present
-[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
-
-# Copy public key to MAMA authorized_keys
-cp ~/.ssh/id_ed25519.pub /usr/share/mama/authorized_keys
-chmod 0644 /usr/share/mama/authorized_keys
-```
-
----
-
-## 11. Verification
-
-### Step 11.1: Verify Service Status
+### Step 6.1: Verify Background Services
 Ensure all three background services are active and running:
 ```bash
 systemctl is-active dnsmasq nfs-server mama-boot
 ```
 All three should report `active`.
 
-### Step 11.2: Check Machine Listing
+### Step 6.2: Test CLI as Non-Root User
 Run `mama list` as your normal user (without `sudo`):
 ```bash
 mama list
 ```
+
 You should see the formatted machine table:
 ```text
                                           Configured Machines                                          
@@ -332,10 +201,21 @@ You should see the formatted machine table:
 
 ---
 
-## 12. Troubleshooting
+## Permissions & Security Architecture
+
+### Why Targeted Non-Recursive Permissions?
+MAMA operates with non-root privileges for routine machine operations, reservations, queue processing, and log inspection.
+
+- **Group `mama`**: Has write access to the SQLite database (`mama.db`), machine locks (`locks/`), and run logs (`log/`).
+- **Group `kvm`**: Has access to `/dev/kvm` and the QEMU bridge helper, allowing virtual machines to attach directly to `br0` without `sudo`.
+- **Rootfs Protection**: The subdirectories `/usr/share/mama/machines/` and `/usr/share/mama/os/` contain complete guest Linux root filesystems. Permissions are applied **non-recursively** so guest system files (`root:root`, `/etc/shadow`, setuid binaries) retain their required ownership and permissions.
+
+---
+
+## Troubleshooting
 
 - **Permissions error accessing logs (`[Errno 13] Permission denied`)**:
-  Ensure permissions on the log directory are set correctly:
+  Ensure your user is in the `mama` group (`groups`) and permissions on `/usr/share/mama/log` are set:
   ```bash
   sudo chgrp -R mama /usr/share/mama/log
   sudo chmod 2775 /usr/share/mama/log
