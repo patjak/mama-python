@@ -228,6 +228,8 @@ Run the synchronization command:
 sudo mama dhcp sync
 ```
 
+> **Note (Jumbo Frames / MTU):** If your network runs Jumbo frames, you can pass `--mtu <value>` (e.g. `sudo mama dhcp sync --mtu 9000`) or set `dhcp_mtu = 9000` in `/etc/mama/mama.conf`.
+
 This will:
 - Write `/etc/dnsmasq.d/mama.conf` configured for bridge `br0` (DHCP range `192.168.2.100` – `192.168.2.200`).
 - Generate `/usr/share/mama/tftp/autoexec.ipxe` pointing to the MAMA boot server (`http://192.168.2.1:8080/boot.py?mac=${mac}`).

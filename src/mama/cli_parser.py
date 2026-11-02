@@ -314,7 +314,8 @@ def setup_cli_parser() -> argparse.ArgumentParser:
 
     p_dhcp = subparsers.add_parser("dhcp", parents=[parent_parser], help="Manage dnsmasq DHCP server", formatter_class=HELP_FORMATTER)
     dhcp_sub = p_dhcp.add_subparsers(dest="dhcp_action", help="DHCP action", metavar="<action>")
-    dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
+    p_sync = dhcp_sub.add_parser("sync", parents=[parent_parser], help="Regenerate config and reload dnsmasq", formatter_class=HELP_FORMATTER)
+    p_sync.add_argument("--mtu", type=int, default=None, help="Interface MTU (DHCP Option 26, e.g. 1500, 9000)")
     dhcp_sub.add_parser("sync-leases", parents=[parent_parser], help="Sync active DHCP leases to machine database", formatter_class=HELP_FORMATTER)
     dhcp_sub.add_parser("leases", parents=[parent_parser], help="Show active DHCP leases", formatter_class=HELP_FORMATTER)
 

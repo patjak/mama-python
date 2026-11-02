@@ -26,6 +26,7 @@ DHCP_RANGE_START: str = "192.168.2.100"
 DHCP_RANGE_END: str = "192.168.2.200"
 DHCP_NETMASK: str = "255.255.255.0"
 DHCP_LEASE_TIME: str = "12h"
+DHCP_MTU: Optional[int] = None  # Interface MTU (DHCP Option 26, e.g. 1500 or 9000)
 DNSMASQ_CONF_PATH: str = "/etc/dnsmasq.d/mama.conf"
 DNSMASQ_LEASES_FILE: str = "/var/lib/misc/dnsmasq.leases"
 
@@ -64,7 +65,7 @@ def load_config(conf_path: Optional[str] = None) -> None:
     global MAMA_PATH, DB_FILE, CONF_FILE, MAMA_HOST, TFTP_DIR
     global PACKAGE_PROXY_ENABLED, PACKAGE_PROXY_HOST, PACKAGE_PROXY_PORT
     global DHCP_ENABLED, DHCP_INTERFACE, DHCP_RANGE_START, DHCP_RANGE_END
-    global DHCP_NETMASK, DHCP_LEASE_TIME, DNSMASQ_CONF_PATH, DNSMASQ_LEASES_FILE
+    global DHCP_NETMASK, DHCP_LEASE_TIME, DHCP_MTU, DNSMASQ_CONF_PATH, DNSMASQ_LEASES_FILE
     global NFS_ENABLED, NFS_SERVICE_NAME, NFS_EXPORTS_PATH, NFS_OPTIONS
     global DEBUG, DEBUG_LOCK, DEBUG_PID, VM_DEFAULT_RAM_MB, VM_HOST_RAM_RESERVE_MB, VM_DEFAULT_CPUS
     global START_TIMEOUT_DEFAULT, STOP_TIMEOUT, SSH_CMD_TIMEOUT, POWER_CYCLE_DELAY, RESOURCE_WAIT_TIMEOUT
@@ -123,6 +124,15 @@ def load_config(conf_path: Optional[str] = None) -> None:
     DHCP_LEASE_TIME = get_val("DHCP_LEASE_TIME", DHCP_LEASE_TIME)
     DNSMASQ_CONF_PATH = get_val("DNSMASQ_CONF_PATH", DNSMASQ_CONF_PATH)
     DNSMASQ_LEASES_FILE = get_val("DNSMASQ_LEASES_FILE", DNSMASQ_LEASES_FILE)
+
+    raw_mtu = os.environ.get("DHCP_MTU") or os.environ.get("MTU") or data.get("DHCP_MTU") or data.get("MTU")
+    if raw_mtu:
+        try:
+            DHCP_MTU = int(raw_mtu)
+        except (ValueError, TypeError):
+            DHCP_MTU = None
+    else:
+        DHCP_MTU = None
 
     # NFS
     NFS_ENABLED = get_val("NFS_ENABLED", NFS_ENABLED, bool)

@@ -81,6 +81,7 @@ class DnsmasqManager:
             f"dhcp-option=option:router,{config.MAMA_HOST}",
             f"dhcp-option=option:dns-server,{config.MAMA_HOST}",
             f"dhcp-option=option:server-ip-address,{config.MAMA_HOST}",
+        ] + ([f"dhcp-option=option:mtu,{config.DHCP_MTU}"] if getattr(config, "DHCP_MTU", None) else []) + [
             "",
             "# Built-in TFTP Server for firmware binaries and iPXE scripts",
             "enable-tftp",

@@ -223,7 +223,10 @@ def main() -> None:
         )
 
     elif args.command == "dhcp":
-        cli_commands.cmd_dhcp(dhcp_action=args.dhcp_action)
+        cli_commands.cmd_dhcp(
+            dhcp_action=args.dhcp_action,
+            mtu=getattr(args, "mtu", None),
+        )
 
     elif args.command == "nfs":
         cli_commands.cmd_nfs(nfs_action=args.nfs_action)

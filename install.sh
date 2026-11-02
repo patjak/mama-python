@@ -60,6 +60,7 @@ dhcp_range_start = 192.168.2.100
 dhcp_range_end = 192.168.2.200
 dhcp_netmask = 255.255.255.0
 dhcp_lease_time = 12h
+# dhcp_mtu = 9000  # Interface MTU (DHCP Option 26, e.g. 1500 or 9000)
 
 # NFS Configuration
 nfs_enabled = true

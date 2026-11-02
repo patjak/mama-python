@@ -36,6 +36,19 @@ class TestDhcp(unittest.TestCase):
         self.assertIn(f"tftp-root={config.TFTP_DIR}", conf_text)
         self.assertIn(f"dhcp-option=option:router,{config.MAMA_HOST}", conf_text)
 
+    def test_generate_config_with_mtu(self):
+        orig_mtu = getattr(config, "DHCP_MTU", None)
+        try:
+            config.DHCP_MTU = 9000
+            conf_text = DnsmasqManager.generate_config()
+            self.assertIn("dhcp-option=option:mtu,9000", conf_text)
+
+            config.DHCP_MTU = None
+            conf_text_no_mtu = DnsmasqManager.generate_config()
+            self.assertNotIn("option:mtu", conf_text_no_mtu)
+        finally:
+            config.DHCP_MTU = orig_mtu
+
     def test_generate_autoexec_ipxe(self):
         success = DnsmasqManager.generate_autoexec_ipxe()
         self.assertTrue(success)

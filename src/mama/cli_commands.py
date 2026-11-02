@@ -1001,11 +1001,15 @@ def cmd_get(machine: Union[str, bool, None] = False, attr: Optional[str] = None)
     out(str(mach.get(attr)))
 
 
-def cmd_dhcp(dhcp_action: Optional[str]) -> None:
+def cmd_dhcp(dhcp_action: Optional[str], mtu: Optional[int] = None) -> None:
+    if mtu is not None:
+        config.DHCP_MTU = mtu
+
     if dhcp_action == "sync":
         if DnsmasqManager.reload_or_restart():
             DnsmasqManager.sync_leases_to_db()
-            out("dnsmasq synchronized and reloaded successfully.")
+            mtu_str = f" (MTU: {config.DHCP_MTU})" if getattr(config, "DHCP_MTU", None) else ""
+            out(f"dnsmasq synchronized and reloaded successfully{mtu_str}.")
         else:
             fatal("Failed to sync dnsmasq.")
     elif dhcp_action == "sync-leases":

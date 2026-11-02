@@ -19,6 +19,7 @@ class TestConfig(unittest.TestCase):
         self.orig_dhcp_start = config.DHCP_RANGE_START
         self.orig_vm_ram = config.VM_DEFAULT_RAM_MB
         self.orig_debug = config.DEBUG
+        self.orig_mtu = getattr(config, "DHCP_MTU", None)
 
     def tearDown(self):
         # Restore original config values
@@ -26,8 +27,9 @@ class TestConfig(unittest.TestCase):
         config.DHCP_RANGE_START = self.orig_dhcp_start
         config.VM_DEFAULT_RAM_MB = self.orig_vm_ram
         config.DEBUG = self.orig_debug
+        config.DHCP_MTU = self.orig_mtu
 
-        for var in ["MAMA_HOST", "MAMA_CONF", "VM_DEFAULT_RAM_MB", "DEBUG"]:
+        for var in ["MAMA_HOST", "MAMA_CONF", "VM_DEFAULT_RAM_MB", "DEBUG", "DHCP_MTU", "MTU"]:
             if var in os.environ:
                 del os.environ[var]
 
@@ -112,6 +114,23 @@ mama_host = 192.168.100.1
         config.load_config()
 
         self.assertEqual(config.MAMA_HOST, "192.168.100.1")
+
+    def test_load_config_dhcp_mtu(self):
+        self.conf_file.write_text(
+            """
+[mama]
+dhcp_mtu = 9000
+""",
+            encoding="utf-8",
+        )
+
+        config.load_config(conf_path=str(self.conf_file))
+        self.assertEqual(config.DHCP_MTU, 9000)
+
+        # Test env var override
+        os.environ["DHCP_MTU"] = "1500"
+        config.load_config(conf_path=str(self.conf_file))
+        self.assertEqual(config.DHCP_MTU, 1500)
 
 
 if __name__ == "__main__":
