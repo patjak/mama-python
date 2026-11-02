@@ -144,8 +144,9 @@ The installer automatically handles all MAMA environment and service setup:
 6. **TFTP Bootloaders**: Stages vendor iPXE binaries (`ipxe.efi`, `undionly.kpxe`, `ipxe-arm64.efi`) into the TFTP root.
 7. **NFS Exports**: Configures `/etc/exports.d/mama.exports` and reloads `nfs-server`.
 8. **SSH Keys**: Stages your developer SSH public key into `/usr/share/mama/authorized_keys`.
-9. **Boot Service**: Installs, enables, and starts the `mama-boot.service` HTTP server.
-10. **CLI Links**: Symlinks the `mama` executable to `/usr/local/bin/mama`.
+9. **Default Worker Machines**: Automatically registers default 'jobs' and 'os-builder' virtual machines in SQLite.
+10. **Boot Service**: Installs, enables, and starts the `mama-boot.service` HTTP server.
+11. **CLI Links**: Symlinks the `mama` executable to `/usr/local/bin/mama`.
 
 > **Activate Group Membership:** If your user account was just added to the `mama` and `kvm` groups, activate them in your current shell:
 > ```bash

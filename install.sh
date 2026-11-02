@@ -144,7 +144,48 @@ if [ ! -f /usr/share/mama/authorized_keys ]; then
     fi
 fi
 
-# 9. Systemd Service Installation
+# 9. Initialize Default Worker Machines (jobs and os-builder)
+echo "Initializing default worker machines in database..."
+PYTHONPATH="$SCRIPT_DIR/src" python3 -c '
+from mama.repository import MachineRepository
+import os, pathlib
+
+MachineRepository.init_db()
+
+default_workers = [
+    {
+        "name": "jobs",
+        "mac": "de:ad:be:ef:00:01",
+        "arch": "",
+        "only_vm": "1",
+        "start_timeout": 45,
+        "stop_timeout": 10,
+    },
+    {
+        "name": "os-builder",
+        "mac": "de:ad:be:ef:00:02",
+        "arch": "",
+        "only_vm": "1",
+        "start_timeout": 240,
+        "stop_timeout": 30,
+    },
+]
+
+locks_dir = pathlib.Path("/usr/share/mama/locks")
+locks_dir.mkdir(parents=True, exist_ok=True)
+
+for w in default_workers:
+    if not MachineRepository.get_by_name(w["name"]):
+        MachineRepository.upsert_machine(w)
+        print(f"  -> Created default worker machine: {w[\"name\"]} ({w[\"mac\"]}, VM)")
+
+    lock_file = locks_dir / f"{w[\"name\"]}.lock"
+    lock_file.touch(mode=0o664, exist_ok=True)
+'
+chgrp mama /usr/share/mama/locks/*.lock 2>/dev/null || true
+chmod 0664 /usr/share/mama/locks/*.lock 2>/dev/null || true
+
+# 10. Systemd Service Installation
 SERVICE_FILE="$SCRIPT_DIR/mama-boot.service"
 if [ -f "$SERVICE_FILE" ] && [ -d /etc/systemd/system ]; then
     echo "Installing systemd service mama-boot.service..."
@@ -156,7 +197,7 @@ if [ -f "$SERVICE_FILE" ] && [ -d /etc/systemd/system ]; then
     fi
 fi
 
-# 10. CLI Runner Symlinks
+# 11. CLI Runner Symlinks
 if [ -f "$SCRIPT_DIR/mama" ]; then
     echo "Linking CLI runner to /usr/local/bin/mama and /usr/bin/mama..."
     mkdir -p /usr/local/bin
