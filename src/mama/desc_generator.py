@@ -18,6 +18,16 @@ FALLBACK_LEAP_VERSIONS = ["16.1", "16.0", "15.6", "15.5"]
 FEDORA_VERSIONS = ["44", "43", "42", "41", "rawhide"]
 
 
+def check_url_exists(url: str, timeout: float = 2.0) -> bool:
+    """Check if a remote URL exists and returns HTTP 200."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "MAMA/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def probe_opensuse_leap_versions(timeout: float = 3.0) -> List[str]:
     """Probe download.opensuse.org/distribution/leap/ for available Leap releases."""
     url = "http://download.opensuse.org/distribution/leap/"
@@ -142,13 +152,15 @@ def build_repositories(
                     "source": f"http://download.opensuse.org/update/leap/{clean_ver}/backports/",
                 })
             else:
-                # Leap 16.x update channel
-                repos.append({
-                    "alias": f"Leap_{ver_alias}_Update",
-                    "imageinclude": "true",
-                    "priority": "99",
-                    "source": f"http://download.opensuse.org/update/leap/{clean_ver}/oss/",
-                })
+                # Leap 16.x update channel (only include if live on download.opensuse.org)
+                update_url = f"http://download.opensuse.org/update/leap/{clean_ver}/oss/"
+                if check_url_exists(update_url):
+                    repos.append({
+                        "alias": f"Leap_{ver_alias}_Update",
+                        "imageinclude": "true",
+                        "priority": "99",
+                        "source": update_url,
+                    })
 
             # Kernel flavor
             if kernel_flavor == "kotd":
@@ -200,6 +212,7 @@ def get_packages(
     distro_family: str,
     arch: str,
     extra_profiles: Optional[List[str]] = None,
+    version: str = "",
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """Return image and bootstrap package lists for the specified distro and architecture."""
     if extra_profiles is None:
@@ -280,18 +293,17 @@ def get_packages(
         # Bootstrap packages
         boot_names = [
             "udev",
-            "diffutils",
             "filesystem",
-            "gawk",
-            "grep",
-            "gzip",
             "glibc-locale",
             "cracklib-dict-full",
             "ca-certificates",
-            "openSUSE-release",
-            "xz",
-            "shadow",
+            "ca-certificates-mozilla",
         ]
+        if version.lower() == "tumbleweed":
+            boot_names.extend(["grep", "diffutils", "gawk", "gzip", "openSUSE-release", "xz", "shadow"])
+        elif version.startswith("15."):
+            boot_names.append("openSUSE-release")
+
         for name in boot_names:
             boot_pkgs.append({"name": name})
 
@@ -397,7 +409,7 @@ def generate_appliance_kiwi(
         ET.SubElement(repo_el, "source", path=r["source"])
 
     # Packages
-    img_pkgs, boot_pkgs = get_packages(distro_family, arch, extra_profiles)
+    img_pkgs, boot_pkgs = get_packages(distro_family, arch, extra_profiles, version=version)
 
     pkgs_img_el = ET.SubElement(root, "packages", type="image")
     for p in img_pkgs:

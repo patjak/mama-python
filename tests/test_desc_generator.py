@@ -67,6 +67,7 @@ class TestDescGenerator(unittest.TestCase):
         self.assertIn("Kernel:/SLE15-SP6", kernel_repo["source"])
 
     def test_build_repositories_leap_16_1_with_kotd(self):
+        # By default Leap 16.1 update repo is not yet live (404), so it should NOT be included
         repos = desc_generator.build_repositories(
             distro_family="opensuse",
             version="16.1",
@@ -75,11 +76,21 @@ class TestDescGenerator(unittest.TestCase):
         )
         aliases = [r["alias"] for r in repos]
         self.assertIn("Leap_16_1", aliases)
-        self.assertIn("Leap_16_1_Update", aliases)
+        self.assertNotIn("Leap_16_1_Update", aliases)
         self.assertIn("kernel", aliases)
 
         kernel_repo = next(r for r in repos if r["alias"] == "kernel")
         self.assertIn("Kernel:/SL-16.1", kernel_repo["source"])
+
+        # If repo is live, it should be included
+        with patch("mama.desc_generator.check_url_exists", return_value=True):
+            repos_live = desc_generator.build_repositories(
+                distro_family="opensuse",
+                version="16.1",
+                arch="x86_64",
+                kernel_flavor="kotd",
+            )
+            self.assertIn("Leap_16_1_Update", [r["alias"] for r in repos_live])
 
     def test_build_repositories_fedora(self):
         repos = desc_generator.build_repositories(
@@ -121,14 +132,11 @@ class TestDescGenerator(unittest.TestCase):
         self.assertTrue(kiwi_file.exists())
         kiwi_content = kiwi_file.read_text(encoding="utf-8")
         self.assertIn("Leap_16_1", kiwi_content)
-        self.assertIn("Leap_16_1_Update", kiwi_content)
+        self.assertNotIn("Leap_16_1_Update", kiwi_content)
         self.assertIn("Kernel:/SL-16.1", kiwi_content)
         self.assertIn("meson", kiwi_content)
         self.assertIn("libdrm-devel", kiwi_content)
-        self.assertIn('<package name="grep"/>', kiwi_content)
-        self.assertIn('<package name="gawk"/>', kiwi_content)
-        self.assertIn('<package name="diffutils"/>', kiwi_content)
-        self.assertIn('<package name="gzip"/>', kiwi_content)
+        self.assertNotIn('<package name="openSUSE-release"/>', kiwi_content)
         self.assertIn(desc_generator.DEFAULT_ROOT_PASSWORD_HASH, kiwi_content)
 
         config_sh = desc_path / "config.sh"
@@ -147,6 +155,19 @@ class TestDescGenerator(unittest.TestCase):
                 version="16.1",
                 base_path=self.temp_dir.name,
             )
+
+    def test_get_packages_bootstrap_per_distro(self):
+        # Tumbleweed requires grep and openSUSE-release in bootstrap to avoid busybox-grep
+        _, tw_boot = desc_generator.get_packages("opensuse", "x86_64", version="tumbleweed")
+        tw_boot_names = [p["name"] for p in tw_boot]
+        self.assertIn("grep", tw_boot_names)
+        self.assertIn("openSUSE-release", tw_boot_names)
+
+        # Leap 16.1 does not provide openSUSE-release
+        _, l16_boot = desc_generator.get_packages("opensuse", "x86_64", version="16.1")
+        l16_boot_names = [p["name"] for p in l16_boot]
+        self.assertNotIn("openSUSE-release", l16_boot_names)
+        self.assertIn("ca-certificates-mozilla", l16_boot_names)
 
     def test_create_os_description_fedora(self):
         desc_path = desc_generator.create_os_description(
