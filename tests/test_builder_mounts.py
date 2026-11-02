@@ -88,6 +88,35 @@ class TestBuilderMounts(unittest.TestCase):
         finally:
             config.PACKAGE_PROXY_ENABLED = orig
 
+    def test_prepare_description_for_build_injects_busybox_grep_ignore(self):
+        from mama.builder import prepare_description_for_build
+        import shutil
+        import xml.etree.ElementTree as ET
+
+        desc_dir = self.root_dir / "test-desc"
+        desc_dir.mkdir()
+        kiwi_file = desc_dir / "appliance.kiwi"
+        kiwi_file.write_text("""<?xml version="1.0" encoding="utf-8"?>
+<image name="test">
+    <preferences>
+        <packagemanager>zypper</packagemanager>
+    </preferences>
+    <packages type="image">
+        <package name="openssh"/>
+    </packages>
+</image>""")
+
+        staged_dir, is_staged = prepare_description_for_build(desc_dir, "x86_64", "test-os")
+        try:
+            self.assertTrue(is_staged)
+            staged_kiwi = staged_dir / "appliance.kiwi"
+            self.assertTrue(staged_kiwi.exists())
+            tree = ET.parse(staged_kiwi)
+            ignores = [ig.get("name") for ig in tree.getroot().findall(".//ignore")]
+            self.assertIn("busybox-grep", ignores)
+        finally:
+            shutil.rmtree(staged_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

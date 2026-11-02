@@ -10,7 +10,7 @@ from typing import Union
 from rich.console import Console
 
 from . import config
-from .logger import error, fatal, out
+from .logger import debug, error, fatal, out
 from .machine import Machine
 from .os_mgr import Arch, Os
 from .util import Util
@@ -113,6 +113,57 @@ def get_kiwi_proxy_args() -> list[str]:
     ]
 
 
+def prepare_description_for_build(desc: pathlib.Path, arch: str, os_name: str) -> tuple[pathlib.Path, bool]:
+    """Stage build description in /dev/shm, injecting busybox-grep exclusion if missing."""
+    import shutil
+    import xml.etree.ElementTree as ET
+
+    clean_os = os_name.replace("/", "_")
+    tmp_desc = pathlib.Path(f"/dev/shm/mama-desc-{arch}-{clean_os}")
+    try:
+        shutil.rmtree(tmp_desc)
+    except FileNotFoundError:
+        pass
+    except (PermissionError, OSError):
+        sudo_prefix = [] if Util.is_root() else ["sudo"]
+        subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_desc)], check=False)
+
+    try:
+        shutil.copytree(desc, tmp_desc)
+
+        xml_file = None
+        for cand in ("appliance.kiwi", "config.xml"):
+            p = tmp_desc / cand
+            if p.exists():
+                xml_file = p
+                break
+
+        if xml_file:
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
+            modified = False
+
+            pm = root.find(".//packagemanager")
+            is_zypper = pm is not None and pm.text and pm.text.strip().lower() == "zypper"
+
+            if is_zypper:
+                for pkgs in root.findall("packages"):
+                    existing_ignores = [ig.get("name") for ig in pkgs.findall("ignore")]
+                    if "busybox-grep" not in existing_ignores:
+                        ign = ET.Element("ignore", name="busybox-grep")
+                        pkgs.insert(0, ign)
+                        modified = True
+
+            if modified:
+                ET.indent(tree, space="    ")
+                tree.write(xml_file, encoding="utf-8", xml_declaration=True)
+
+        return tmp_desc, True
+    except Exception as e:
+        debug(f"Failed to stage description for build: {e}")
+        return desc, False
+
+
 def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     """Execute local Kiwi-ng build, mount proc/sys, chroot dracut initramfs generation, and install authorized_keys."""
     packages_list = [f"--add-package={p}" for p in packages.split()]
@@ -132,82 +183,89 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     tmp_dir = pathlib.Path(f"/dev/shm/mama-kiwi-{arch}-{os_name}")
     sudo_prefix = [] if Util.is_root() else ["sudo"]
 
-    with Os.lock(arch, os_name, shared=False):
-        subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
+    desc_to_use, is_staged = prepare_description_for_build(desc, arch, os_name)
 
-        kiwi_cmd = (
-            sudo_prefix
-            + ["kiwi-ng"]
-            + get_kiwi_proxy_args()
-            + [
-                "--debug",
-                "system",
-                "prepare",
-                "--description",
-                str(desc),
-                "--root",
-                str(tmp_dir),
-            ]
-            + packages_list
-        )
-
-        console = Console()
-        with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
-            out(" ".join(kiwi_cmd))
-            res = subprocess.run(kiwi_cmd)
-
-        if res.returncode != 0:
-            error("Failed to build os with kiwi")
+    try:
+        with Os.lock(arch, os_name, shared=False):
             subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
-            return
 
-        with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
-            pass
+            kiwi_cmd = (
+                sudo_prefix
+                + ["kiwi-ng"]
+                + get_kiwi_proxy_args()
+                + [
+                    "--debug",
+                    "system",
+                    "prepare",
+                    "--description",
+                    str(desc_to_use),
+                    "--root",
+                    str(tmp_dir),
+                ]
+                + packages_list
+            )
 
-        with chroot_mounts(tmp_dir):
-            config_files = list((tmp_dir / "boot").glob("config-*"))
-            if not config_files:
-                error("Failed to find /boot/config-*")
+            console = Console()
+            with console.status(f"[bold cyan]Building OS template {arch}/{os_name} with kiwi-ng...[/bold cyan]"):
+                out(" ".join(kiwi_cmd))
+                res = subprocess.run(kiwi_cmd)
+
+            if res.returncode != 0:
+                error("Failed to build os with kiwi")
                 subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
 
-            kver = config_files[0].name.split("config-", 1)[1]
+            with console.status("[bold cyan]Mounting procfs and sysfs...[/bold cyan]"):
+                pass
 
-            with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
-                res = subprocess.run(sudo_prefix + ["chroot", str(tmp_dir), "dracut", "-f", "--kver", kver])
+            with chroot_mounts(tmp_dir):
+                config_files = list((tmp_dir / "boot").glob("config-*"))
+                if not config_files:
+                    error("Failed to find /boot/config-*")
+                    subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
+                    return
 
+                kver = config_files[0].name.split("config-", 1)[1]
+
+                with console.status(f"[bold cyan]Generating initramfs with dracut (kernel {kver})...[/bold cyan]"):
+                    res = subprocess.run(sudo_prefix + ["chroot", str(tmp_dir), "dracut", "-f", "--kver", kver])
+
+                if res.returncode != 0:
+                    error("Failed to run dracut -f inside chroot")
+                    subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
+                    return
+
+            res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
             if res.returncode != 0:
-                error("Failed to run dracut -f inside chroot")
+                fatal(f"Failed to remove old version of os: {target}")
+
+            res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(pathlib.Path(config.MAMA_PATH) / "os" / arch)])
+            if res.returncode != 0:
+                fatal("Failed to create target directory")
+
+            out("Moving OS into place")
+            res = subprocess.run(sudo_prefix + ["mv", str(tmp_dir), str(target)])
+            if res.returncode != 0:
+                error("Failed to store new os build")
                 subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
                 return
 
-        res = subprocess.run(sudo_prefix + ["rm", "-Rf", str(target)])
-        if res.returncode != 0:
-            fatal(f"Failed to remove old version of os: {target}")
+            initrd_files = list((target / "boot").glob("initrd-*"))
+            if initrd_files:
+                chmod_args = [str(f) for f in initrd_files]
+                res = subprocess.run(sudo_prefix + ["chmod", "644"] + chmod_args)
+                if res.returncode != 0:
+                    fatal("Failed to change permission on initrd")
 
-        res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(pathlib.Path(config.MAMA_PATH) / "os" / arch)])
-        if res.returncode != 0:
-            fatal("Failed to create target directory")
+            auth_keys = pathlib.Path(config.MAMA_PATH) / "authorized_keys"
+            res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(target / "root" / ".ssh")])
+            if res.returncode == 0 and auth_keys.exists():
+                res = subprocess.run(sudo_prefix + ["cp", str(auth_keys), str(target / "root" / ".ssh/")])
+                if res.returncode != 0:
+                    fatal("Failed to copy authorized_keys")
 
-        out("Moving OS into place")
-        res = subprocess.run(sudo_prefix + ["mv", str(tmp_dir), str(target)])
-        if res.returncode != 0:
-            error("Failed to store new os build")
-            subprocess.run(sudo_prefix + ["rm", "-Rf", str(tmp_dir)])
-            return
-
-        initrd_files = list((target / "boot").glob("initrd-*"))
-        if initrd_files:
-            chmod_args = [str(f) for f in initrd_files]
-            res = subprocess.run(sudo_prefix + ["chmod", "644"] + chmod_args)
-            if res.returncode != 0:
-                fatal("Failed to change permission on initrd")
-
-        auth_keys = pathlib.Path(config.MAMA_PATH) / "authorized_keys"
-        res = subprocess.run(sudo_prefix + ["mkdir", "-p", str(target / "root" / ".ssh")])
-        if res.returncode == 0 and auth_keys.exists():
-            res = subprocess.run(sudo_prefix + ["cp", str(auth_keys), str(target / "root" / ".ssh/")])
-            if res.returncode != 0:
-                fatal("Failed to copy authorized_keys")
-
-    out("OS build completed")
+        out("OS build completed")
+    finally:
+        if is_staged:
+            import shutil
+            shutil.rmtree(desc_to_use, ignore_errors=True)

@@ -218,6 +218,7 @@ def get_packages(
             "grub2-branding-openSUSE",
             "iputils",
             "vim",
+            "grep",
             "grub2",
             "lvm2",
             "plymouth",
@@ -280,6 +281,7 @@ def get_packages(
         boot_names = [
             "udev",
             "filesystem",
+            "grep",
             "glibc-locale",
             "cracklib-dict-full",
             "ca-certificates",
@@ -393,6 +395,8 @@ def generate_appliance_kiwi(
     img_pkgs, boot_pkgs = get_packages(distro_family, arch, extra_profiles)
 
     pkgs_img_el = ET.SubElement(root, "packages", type="image")
+    if distro_family == "opensuse":
+        ET.SubElement(pkgs_img_el, "ignore", name="busybox-grep")
     for p in img_pkgs:
         attrs = {"name": p["name"]}
         if "arch" in p:
@@ -400,6 +404,8 @@ def generate_appliance_kiwi(
         ET.SubElement(pkgs_img_el, "package", **attrs)
 
     pkgs_boot_el = ET.SubElement(root, "packages", type="bootstrap")
+    if distro_family == "opensuse":
+        ET.SubElement(pkgs_boot_el, "ignore", name="busybox-grep")
     for p in boot_pkgs:
         attrs = {"name": p["name"]}
         if "arch" in p:
