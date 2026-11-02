@@ -50,6 +50,44 @@ class TestBuilderMounts(unittest.TestCase):
         self.assertEqual(umount_calls[0][0][0], ["umount", str(self.root_dir / "sys")])
         self.assertEqual(umount_calls[1][0][0], ["umount", str(self.root_dir / "proc")])
 
+    def test_get_kiwi_proxy_args_disabled_by_default(self):
+        from mama import config
+        from mama.builder import get_kiwi_proxy_args
+
+        orig = config.PACKAGE_PROXY_ENABLED
+        try:
+            config.PACKAGE_PROXY_ENABLED = False
+            self.assertEqual(get_kiwi_proxy_args(), [])
+        finally:
+            config.PACKAGE_PROXY_ENABLED = orig
+
+    @patch("mama.builder.is_proxy_available", return_value=True)
+    def test_get_kiwi_proxy_args_enabled_and_reachable(self, mock_avail):
+        from mama import config
+        from mama.builder import get_kiwi_proxy_args
+
+        orig = config.PACKAGE_PROXY_ENABLED
+        try:
+            config.PACKAGE_PROXY_ENABLED = True
+            args = get_kiwi_proxy_args()
+            self.assertEqual(len(args), 4)
+            self.assertTrue(any("http_proxy=" in a for a in args))
+        finally:
+            config.PACKAGE_PROXY_ENABLED = orig
+
+    @patch("mama.builder.is_proxy_available", return_value=False)
+    def test_get_kiwi_proxy_args_enabled_but_unreachable_falls_back(self, mock_avail):
+        from mama import config
+        from mama.builder import get_kiwi_proxy_args
+
+        orig = config.PACKAGE_PROXY_ENABLED
+        try:
+            config.PACKAGE_PROXY_ENABLED = True
+            # When proxy is unreachable, it falls back to direct connection ([])
+            self.assertEqual(get_kiwi_proxy_args(), [])
+        finally:
+            config.PACKAGE_PROXY_ENABLED = orig
+
 
 if __name__ == "__main__":
     unittest.main()

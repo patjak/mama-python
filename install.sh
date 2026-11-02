@@ -86,6 +86,11 @@ nfs_enabled = true
 nfs_service_name = nfs-server
 nfs_exports_path = /etc/exports.d/mama.exports
 
+# Package Cache Proxy (optional apt-cacher-ng on port 3142)
+# package_proxy_enabled = false
+# package_proxy_host = 192.168.2.1
+# package_proxy_port = 3142
+
 # Virtual Machine Defaults (auto: host RAM minus reserve)
 vm_default_ram_mb = auto
 vm_host_ram_reserve_mb = 4096

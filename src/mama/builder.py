@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import pathlib
+import socket
 import subprocess
 from typing import Union
 
@@ -82,14 +83,28 @@ def build_os(
         subprocess.run(cmd)
 
 
+def is_proxy_available(host: str, port: int, timeout: float = 0.5) -> bool:
+    """Quick socket check to verify if a package proxy daemon is listening."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def get_kiwi_proxy_args() -> list[str]:
-    """Return kiwi --setenv arguments for the package proxy if enabled."""
+    """Return kiwi --setenv arguments for the package proxy if enabled and reachable."""
     if not getattr(config, "PACKAGE_PROXY_ENABLED", False):
         return []
 
     proxy_host = getattr(config, "PACKAGE_PROXY_HOST", config.MAMA_HOST)
     proxy_port = getattr(config, "PACKAGE_PROXY_PORT", 3142)
     proxy_url = f"http://{proxy_host}:{proxy_port}"
+
+    if not is_proxy_available(proxy_host, proxy_port):
+        out(f"Notice: Package cache proxy at {proxy_url} is unreachable. Proceeding with direct download.")
+        return []
+
     return [
         f"--setenv=http_proxy={proxy_url}",
         f"--setenv=https_proxy={proxy_url}",

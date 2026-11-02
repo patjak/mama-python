@@ -15,7 +15,7 @@ MAMA_HOST: str = "192.168.2.1"
 TFTP_DIR: str = f"{MAMA_PATH}/tftp"  # Root directory served by dnsmasq TFTP
 
 # Package Cache Proxy (apt-cacher-ng)
-PACKAGE_PROXY_ENABLED: bool = True
+PACKAGE_PROXY_ENABLED: bool = False
 PACKAGE_PROXY_HOST: str = MAMA_HOST
 PACKAGE_PROXY_PORT: int = 3142
 
@@ -26,7 +26,7 @@ DHCP_RANGE_START: str = "192.168.2.100"
 DHCP_RANGE_END: str = "192.168.2.200"
 DHCP_NETMASK: str = "255.255.255.0"
 DHCP_LEASE_TIME: str = "12h"
-DHCP_MTU: Optional[int] = None  # Interface MTU (DHCP Option 26, e.g. 1500 or 9000)
+DHCP_MTU: Optional[int] = 1450  # Interface MTU (DHCP Option 26, e.g. 1500 or 9000)
 DNSMASQ_CONF_PATH: str = "/etc/dnsmasq.d/mama.conf"
 DNSMASQ_LEASES_FILE: str = "/var/lib/misc/dnsmasq.leases"
 
