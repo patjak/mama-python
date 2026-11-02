@@ -1077,3 +1077,153 @@ def cmd_nfs(nfs_action: Optional[str]) -> None:
             console.print(table)
     else:
         out("Unknown or missing NFS action. See `mama nfs --help`.")
+
+
+def cmd_new_os_desc(
+    arch: Optional[str] = None,
+    distro: Optional[str] = None,
+    version: Optional[str] = None,
+    kernel: Optional[str] = None,
+    name: Optional[str] = None,
+    profiles: Optional[List[str]] = None,
+) -> None:
+    from . import desc_generator
+
+    # 1. Target Architecture
+    if not arch:
+        buildable = Arch.get_buildable()
+        host_arch = os.uname().machine
+        default_choice = host_arch if host_arch in buildable else (buildable[0] if buildable else "x86_64")
+        ans = questionary.select(
+            "Select Target Architecture:",
+            choices=buildable,
+            default=default_choice,
+        ).ask()
+        if not ans:
+            return
+        arch = str(ans).strip()
+
+    # 2. Distribution Family
+    if not distro:
+        ans = questionary.select(
+            "Select Distribution Family:",
+            choices=["openSUSE", "Fedora"],
+        ).ask()
+        if not ans:
+            return
+        distro = str(ans).strip().lower()
+    else:
+        distro = distro.strip().lower()
+
+    # 3. Release Version
+    if not version:
+        if distro == "opensuse":
+            console = Console()
+            with console.status("[bold cyan]Probing download.opensuse.org for releases...[/bold cyan]"):
+                leap_versions = desc_generator.probe_opensuse_leap_versions()
+
+            choices = [f"Leap {v}" for v in leap_versions] + ["Tumbleweed (Rolling)", "Slowroll"]
+            ans = questionary.select("Select openSUSE Release:", choices=choices).ask()
+            if not ans:
+                return
+            if "Tumbleweed" in ans:
+                version = "tumbleweed"
+            elif "Slowroll" in ans:
+                version = "slowroll"
+            else:
+                version = ans.replace("Leap", "").strip()
+        elif distro == "fedora":
+            choices = desc_generator.FEDORA_VERSIONS
+            ans = questionary.select("Select Fedora Release:", choices=choices).ask()
+            if not ans:
+                return
+            version = str(ans).strip()
+        else:
+            ans = questionary.text("Enter version:").ask()
+            if not ans:
+                return
+            version = ans.strip()
+
+    # 4. Kernel Flavor
+    custom_kernel_url = ""
+    if not kernel:
+        if distro == "opensuse":
+            k_choices = [
+                "Stock (Distribution default)",
+                "KOTD (Kernel of the Day from openSUSE Kernel service)",
+                "DRM Backport (drm-backport kernel)",
+                "Custom OBS URL",
+            ]
+            ans = questionary.select("Select Kernel Flavor:", choices=k_choices).ask()
+            if not ans:
+                return
+            if "KOTD" in ans:
+                kernel = "kotd"
+            elif "DRM" in ans:
+                kernel = "drm-backport"
+            elif "Custom" in ans:
+                kernel = "custom"
+                c_url = questionary.text("Enter custom repository URL:").ask()
+                if not c_url:
+                    return
+                custom_kernel_url = c_url.strip()
+            else:
+                kernel = "stock"
+        else:
+            kernel = "stock"
+
+    # 5. OS Description Name
+    suggested_name = ""
+    if distro == "opensuse":
+        if version.lower() in ("tumbleweed", "slowroll"):
+            suggested_name = version.lower() + ("-kotd" if kernel == "kotd" else "")
+        else:
+            suffix = f"-{kernel}" if kernel not in ("stock", "custom") else ""
+            suggested_name = f"leap-{version}{suffix}"
+    elif distro == "fedora":
+        suggested_name = f"fedora-{version}.0" if version != "rawhide" else "fedora-rawhide"
+    else:
+        suggested_name = f"{distro}-{version}"
+
+    if not name:
+        while True:
+            ans = questionary.text("OS Description Name:", default=suggested_name).ask()
+            if not ans:
+                return
+            cand_name = ans.strip()
+            existing_dir = pathlib.Path(config.MAMA_PATH) / "os-descriptions" / arch / cand_name
+            if existing_dir.exists():
+                error(f"OS description '{arch}/{cand_name}' already exists.")
+            else:
+                name = cand_name
+                break
+
+    # 6. Extra package profiles
+    if profiles is None:
+        p_choices = [
+            questionary.Choice("Baseline Services (SSH, NFS client, NetworkManager, Chrony)", checked=True, value="baseline"),
+            questionary.Choice("IGT GPU Tools Dependencies (meson, libdrm-devel, etc.)", checked=False, value="igt"),
+            questionary.Choice("ROCm Compute Stack (rocm-runtime, hipcc, rocminfo, etc.)", checked=False, value="rocm"),
+        ]
+        ans = questionary.checkbox("Select Package Profiles to Include:", choices=p_choices).ask()
+        if ans is None:
+            return
+        profiles = list(ans)
+
+    # 7. Generate OS description
+    try:
+        desc_path = desc_generator.create_os_description(
+            arch=arch,
+            name=name,
+            distro_family=distro,
+            version=version,
+            kernel_flavor=kernel or "stock",
+            custom_kernel_url=custom_kernel_url,
+            extra_profiles=profiles,
+        )
+        out(f"\n[bold green]Successfully generated OS description:[/bold green] {arch}/{name}")
+        out(f"Path: {desc_path}")
+        out("\nTo build this OS template rootfs:")
+        out(f"  mama build-os {arch} {name}")
+    except Exception as e:
+        error(f"Failed to create OS description: {e}")

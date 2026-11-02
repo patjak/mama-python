@@ -156,6 +156,15 @@ def main() -> None:
     elif args.command == "new":
         cli_commands.cmd_new()
 
+    elif args.command == "new-os-desc":
+        cli_commands.cmd_new_os_desc(
+            arch=getattr(args, "arch", None),
+            distro=getattr(args, "distro", None),
+            version=getattr(args, "version", None),
+            kernel=getattr(args, "kernel", None),
+            name=getattr(args, "name", None),
+        )
+
     elif args.command == "delete":
         cli_commands.cmd_delete(arg=args.machine)
 

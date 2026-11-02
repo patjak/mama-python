@@ -245,6 +245,14 @@ def setup_cli_parser() -> argparse.ArgumentParser:
     p_copy_dst = p_copy_os.add_argument("dst_mach", help="Destination machine")
     p_copy_dst.completer = machine_completer
 
+    p_new_desc = subparsers.add_parser("new-os-desc", parents=[parent_parser], help="Create a new Kiwi OS description template", formatter_class=HELP_FORMATTER)
+    p_new_desc_arch = p_new_desc.add_argument("--arch", help="Target architecture (e.g. x86_64, aarch64)")
+    p_new_desc_arch.completer = arch_completer
+    p_new_desc.add_argument("--distro", help="Distribution family (opensuse, fedora)")
+    p_new_desc.add_argument("--version", help="Distribution release version (e.g. 16.1, tumbleweed, 44)")
+    p_new_desc.add_argument("--kernel", default=None, help="Kernel flavor (stock, kotd, drm-backport, custom)")
+    p_new_desc.add_argument("--name", help="OS description directory name (e.g. leap-16.1-kotd)")
+
     subparsers.add_parser("new", parents=[parent_parser], help="Add a new machine", formatter_class=HELP_FORMATTER)
 
     p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete an existing machine", formatter_class=HELP_FORMATTER)
