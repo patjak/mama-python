@@ -125,6 +125,10 @@ class TestDescGenerator(unittest.TestCase):
         self.assertIn("Kernel:/SL-16.1", kiwi_content)
         self.assertIn("meson", kiwi_content)
         self.assertIn("libdrm-devel", kiwi_content)
+        self.assertIn('<package name="grep"/>', kiwi_content)
+        self.assertIn('<package name="gawk"/>', kiwi_content)
+        self.assertIn('<package name="diffutils"/>', kiwi_content)
+        self.assertIn('<package name="gzip"/>', kiwi_content)
         self.assertIn(desc_generator.DEFAULT_ROOT_PASSWORD_HASH, kiwi_content)
 
         config_sh = desc_path / "config.sh"
