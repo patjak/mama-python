@@ -88,6 +88,29 @@ class TestBuilderMounts(unittest.TestCase):
         finally:
             config.PACKAGE_PROXY_ENABLED = orig
 
+    @patch("shutil.which", return_value=None)
+    def test_check_required_packagemanager_missing(self, mock_which):
+        from mama.builder import check_required_packagemanager
+
+        desc_dir = self.root_dir / "test-fedora"
+        desc_dir.mkdir(exist_ok=True)
+        (desc_dir / "appliance.kiwi").write_text("""<?xml version="1.0" encoding="utf-8"?>
+<image name="test"><preferences><packagemanager>dnf5</packagemanager></preferences></image>""")
+
+        with self.assertRaises(SystemExit):
+            check_required_packagemanager(desc_dir)
+
+    @patch("shutil.which", return_value="/usr/bin/dnf5")
+    def test_check_required_packagemanager_present(self, mock_which):
+        from mama.builder import check_required_packagemanager
+
+        desc_dir = self.root_dir / "test-fedora-ok"
+        desc_dir.mkdir(exist_ok=True)
+        (desc_dir / "appliance.kiwi").write_text("""<?xml version="1.0" encoding="utf-8"?>
+<image name="test"><preferences><packagemanager>dnf5</packagemanager></preferences></image>""")
+
+        check_required_packagemanager(desc_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

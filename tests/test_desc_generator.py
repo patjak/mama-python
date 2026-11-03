@@ -188,6 +188,17 @@ class TestDescGenerator(unittest.TestCase):
         self.assertIn("dbus-broker", config_sh.read_text(encoding="utf-8"))
         self.assertTrue((desc_path / "root" / "fastboot").exists())
 
+    @patch("shutil.which")
+    def test_generate_appliance_kiwi_fedora_fallback_to_dnf4(self, mock_which):
+        mock_which.side_effect = lambda cmd: "/usr/bin/dnf" if cmd == "dnf" else None
+        xml_text = desc_generator.generate_appliance_kiwi(
+            name="fedora-test",
+            distro_family="fedora",
+            version="44",
+            arch="x86_64",
+        )
+        self.assertIn("<packagemanager>dnf4</packagemanager>", xml_text)
+
     def test_cmd_new_os_desc_non_interactive(self):
         cmd_new_os_desc(
             arch="x86_64",

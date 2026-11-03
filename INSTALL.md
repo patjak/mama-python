@@ -42,7 +42,11 @@ sudo zypper install -y \
 
 *(Optional)* If you plan to build OS root filesystems with Kiwi on the host:
 ```bash
+# Kiwi image builder (required for 'mama build-os')
 sudo zypper install -y python3-kiwi
+
+# Package manager for building Fedora appliances (optional)
+sudo zypper install -y dnf5
 ```
 
 ---

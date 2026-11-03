@@ -4,6 +4,7 @@ import grp
 import os
 import pathlib
 import re
+import shutil
 import urllib.error
 import urllib.request
 import xml.dom.minidom
@@ -358,8 +359,17 @@ def generate_appliance_kiwi(
     password_hash: str = DEFAULT_ROOT_PASSWORD_HASH,
 ) -> str:
     """Generate the XML text for appliance.kiwi."""
-    schema_ver = "7.6" if distro_family == "fedora" else "7.5"
-    packagemanager = "dnf5" if distro_family == "fedora" else "zypper"
+    if distro_family == "fedora":
+        schema_ver = "7.6"
+        if shutil.which("dnf5"):
+            packagemanager = "dnf5"
+        elif shutil.which("dnf"):
+            packagemanager = "dnf4"
+        else:
+            packagemanager = "dnf5"
+    else:
+        schema_ver = "7.5"
+        packagemanager = "zypper"
 
     root = ET.Element("image", schemaversion=schema_ver, name=f"{name}_appliance")
 

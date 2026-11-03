@@ -3,9 +3,11 @@ from __future__ import annotations
 import contextlib
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 from typing import Union
+import xml.etree.ElementTree as ET
 
 from rich.console import Console
 
@@ -113,6 +115,46 @@ def get_kiwi_proxy_args() -> list[str]:
     ]
 
 
+def check_required_packagemanager(desc: pathlib.Path) -> None:
+    """Verify that the host has the required package manager installed before spawning Kiwi."""
+    xml_file = None
+    for cand in ("appliance.kiwi", "config.xml"):
+        p = desc / cand
+        if p.exists():
+            xml_file = p
+            break
+
+    if not xml_file:
+        return
+
+    pm_name = "zypper"
+    try:
+        tree = ET.parse(xml_file)
+        pm_el = tree.getroot().find(".//packagemanager")
+        if pm_el is not None and pm_el.text:
+            pm_name = pm_el.text.strip().lower()
+    except Exception:
+        return
+
+    binary_map = {
+        "zypper": ["zypper"],
+        "dnf5": ["dnf5"],
+        "dnf4": ["dnf", "dnf4"],
+        "dnf": ["dnf", "dnf5"],
+        "apt": ["apt-get", "apt"],
+        "pacman": ["pacman"],
+        "apk": ["apk"],
+        "microdnf": ["microdnf"],
+    }
+    candidates = binary_map.get(pm_name, [pm_name])
+    if not any(shutil.which(cmd) for cmd in candidates):
+        pkg_suggestion = "dnf5" if pm_name == "dnf5" else ("dnf" if "dnf" in pm_name else pm_name)
+        fatal(
+            f"Package manager '{pm_name}' is required by {desc.name} but was not found on this host.\n"
+            f"Install it on the host with: sudo zypper install {pkg_suggestion}"
+        )
+
+
 def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
     """Execute local Kiwi-ng build, mount proc/sys, chroot dracut initramfs generation, and install authorized_keys."""
     packages_list = [f"--add-package={p}" for p in packages.split()]
@@ -129,6 +171,8 @@ def run_os_build_script(arch: str, os_name: str, packages: str = "") -> None:
 
     target = pathlib.Path(config.MAMA_PATH) / "os" / arch / os_name
     desc = pathlib.Path(config.MAMA_PATH) / "os-descriptions" / arch / os_name
+    check_required_packagemanager(desc)
+
     tmp_dir = pathlib.Path(f"/dev/shm/mama-kiwi-{arch}-{os_name}")
     sudo_prefix = [] if Util.is_root() else ["sudo"]
 
